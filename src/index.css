@@ -1,0 +1,473 @@
+:root {
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  /* Responsive Breakpoints */
+  --breakpoint-mobile: 500px;
+  --breakpoint-tablet: 900px;
+  --breakpoint-desktop: 1024px;
+
+  /* Touch-friendly sizing */
+  --touch-target-min: 44px;
+  --input-height: 48px;
+  --button-height: 44px;
+
+  /* Spacing */
+  --safe-padding-mobile: 14px;
+  --safe-padding-tablet: 18px;
+  --safe-padding-desktop: 24px;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-width: 320px;
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  width: 100%;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+
+button:hover {
+  border-color: #646cff;
+}
+
+button:focus,
+button:focus-visible {
+  outline: 4px auto -webkit-focus-ring-color;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  button {
+    background-color: #f9f9f9;
+  }
+}
+
+/* ========================================
+   RESPONSIVE UTILITIES & MEDIA QUERIES
+   ======================================== */
+
+/* Touch-friendly button sizing — only for nav/action buttons, not tiny icon buttons */
+input, textarea, select {
+  min-height: var(--input-height);
+}
+
+/* Consistent view container sizing */
+.view-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.view-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+/* Responsive modal utilities */
+.responsive-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.responsive-modal-content {
+  background: #fff;
+  border-radius: 12px;
+  max-width: 420px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* All views fill the full width of their container */
+.view-content > div {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Responsive grid utilities */
+.grid-responsive {
+  display: grid;
+  gap: 10px;
+}
+
+.grid-responsive.products {
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+}
+
+.grid-responsive.modal-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.grid-responsive.payment-grid {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.grid-responsive.shift-summary {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+/* Flex wrapping utilities */
+.flex-wrap-mobile {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.flex-responsive {
+  display: flex;
+  gap: 8px;
+}
+
+/* === TABLET BREAKPOINT (500px - 899px) === */
+@media (max-width: 899px) {
+  /* Product grid - reduce item size for tablet */
+  .grid-responsive.products {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 8px;
+  }
+
+  /* Cart sidebar narrower on tablet */
+  .cart-sidebar-tablet {
+    width: 280px;
+  }
+
+  /* Modal responsiveness */
+  .responsive-modal {
+    max-width: 85vw;
+    width: 85vw;
+    padding: 18px !important;
+  }
+
+  /* Reduce padding on tablet */
+  .responsive-padding {
+    padding: var(--safe-padding-tablet) !important;
+  }
+
+  /* Category buttons - allow wrapping */
+  .flex-wrap-mobile {
+    flex-wrap: wrap;
+  }
+
+  /* Payment grid - 3 columns on tablet */
+  .grid-responsive.payment-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* Shift summary grid - 2 columns on tablet */
+  .grid-responsive.shift-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* Settings grids - 2 columns on tablet */
+  .grid-responsive.settings-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* Dashboard - 2 column cards on tablet */
+  .grid-responsive.dashboard-cards {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* === MOBILE BREAKPOINT (< 500px) === */
+@media (max-width: 499px) {
+  * {
+    /* Reduce scrollbar width on mobile */
+    scrollbar-width: thin;
+  }
+
+  body {
+    min-width: 320px;
+    overflow-x: hidden;
+  }
+
+  /* Product grid - 2-3 items per row on mobile */
+  .grid-responsive.products {
+    grid-template-columns: repeat(auto-fill, minmax(85px, 1fr));
+    gap: 6px;
+    padding: 10px !important;
+  }
+
+  /* Modal max width for mobile */
+  .responsive-modal {
+    max-width: 95vw;
+    width: 95vw;
+    max-height: 95vh;
+    padding: 14px !important;
+    margin: auto 10px !important;
+  }
+
+  /* Mobile-safe padding */
+  .responsive-padding {
+    padding: var(--safe-padding-mobile) !important;
+  }
+
+  /* Payment grid - stack vertically on mobile */
+  .grid-responsive.payment-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  /* Shift summary - single column on mobile */
+  .grid-responsive.shift-summary {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  /* Settings grids - single column on mobile */
+  .grid-responsive.settings-grid {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  /* Admin grids - single column on mobile */
+  .grid-responsive.admin-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Dashboard - single column on mobile */
+  .grid-responsive.dashboard-cards {
+    grid-template-columns: 1fr;
+  }
+
+  /* Modal grids - single column on mobile */
+  .grid-responsive.modal-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Button full width on mobile */
+  .button-full-mobile {
+    width: 100%;
+  }
+
+  /* Input full width on mobile */
+  .input-full-mobile {
+    width: 100% !important;
+    box-sizing: border-box;
+  }
+
+  /* Hide on mobile utility */
+  .hide-mobile {
+    display: none;
+  }
+
+  /* Category buttons - wrap on mobile */
+  .flex-wrap-mobile {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 0 8px 8px 8px;
+  }
+
+  /* Reduce font sizes for mobile */
+  .text-sm-mobile {
+    font-size: 12px;
+  }
+
+  .text-xs-mobile {
+    font-size: 11px;
+  }
+
+  /* Reduce button padding on mobile */
+  .button-mobile-compact {
+    padding: 8px 10px !important;
+    font-size: 13px !important;
+  }
+
+  /* Navigation bar repositioning on mobile */
+  /* This transforms the left sidebar to bottom navigation */
+  body > div > div:first-child {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 60px;
+    flex-direction: row;
+    padding: 0 !important;
+    width: 100vw;
+    gap: 0 !important;
+    z-index: 100;
+  }
+
+  body > div > div:first-child > div:first-child {
+    margin-bottom: 0 !important;
+    display: none;
+  }
+
+  body > div > div:first-child > button {
+    width: 100%;
+    flex: 1;
+    height: 60px;
+    border-radius: 0 !important;
+    gap: 0 !important;
+    padding: 0 !important;
+    font-size: 10px !important;
+  }
+
+  body > div > div:first-child > div:last-child {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    margin: 0 !important;
+    text-align: right;
+  }
+
+  body > div > div:last-child {
+    padding-bottom: 60px;
+  }
+
+  /* Adjust main content for bottom nav */
+  .main-with-bottom-nav {
+    padding-bottom: 60px;
+  }
+
+  /* Cart modal overlay on mobile */
+  .cart-modal-mobile {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: flex-end;
+    z-index: 1000;
+  }
+
+  .cart-modal-mobile > div {
+    width: 100%;
+    max-height: 80vh;
+    background: #fff;
+    border-radius: 12px 12px 0 0;
+    display: flex;
+    flex-direction: column;
+    animation: slideUp 0.3s ease;
+  }
+
+  @keyframes slideUp {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
+  /* Responsive flex layouts */
+  .flex-col-mobile {
+    flex-direction: column !important;
+    width: 100%;
+  }
+
+  /* Reduce icon sizes on mobile */
+  .icon-mobile {
+    font-size: 16px !important;
+  }
+
+  /* Safe area insets for notched devices */
+  @supports (padding: max(0px)) {
+    .safe-area {
+      padding-left: max(14px, env(safe-area-inset-left));
+      padding-right: max(14px, env(safe-area-inset-right));
+      padding-top: max(14px, env(safe-area-inset-top));
+      padding-bottom: max(14px, env(safe-area-inset-bottom));
+    }
+  }
+
+  /* Responsive table/list styles */
+  .responsive-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* Responsive table row layouts */
+  .table-row {
+    display: grid;
+    gap: 8px;
+  }
+
+  .table-header {
+    display: none;
+  }
+
+  .table-cell {
+    word-break: break-word;
+  }
+
+  .table-cell::before {
+    content: attr(data-label);
+    font-weight: 700;
+    margin-right: 8px;
+  }
+
+  /* Reduce spacing on mobile */
+  .space-reduce-mobile {
+    margin: 0 !important;
+    padding: 6px !important;
+    gap: 4px !important;
+  }
+}
+
+/* === EXTRA SMALL (< 375px) === */
+@media (max-width: 374px) {
+  /* Additional optimizations for very small phones */
+  .grid-responsive.products {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px;
+    padding: 8px !important;
+  }
+
+  .button-mobile-compact {
+    padding: 6px 8px !important;
+    font-size: 12px !important;
+  }
+
+  /* Stack more aggressively on extra small screens */
+  .flex-responsive {
+    flex-direction: column;
+  }
+
+  /* Hide non-essential text on very small screens */
+  .hide-xs {
+    display: none;
+  }
+}

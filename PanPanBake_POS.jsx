@@ -1,0 +1,1832 @@
+import { useState, useRef, useEffect } from "react";
+import { useWindowSize } from "./src/hooks/useWindowSize.js";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
+import { syncOrder, syncShift, checkConnection } from "./src/lib/supabase.js";
+
+// ============================================================
+// CONSTANTS
+// ============================================================
+const DEFAULT_SHOP_INFO = {
+  name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
+  address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
+  city: "ນະຄອນຫຼວງວຽງຈັນ, ລາວ", phone: "020 XXXX XXXX",
+  footer: "ຂອບໃຈທີ່ໃຊ້ບໍລິການ! • Thank you!",
+  qrBank: "BCEL One", qrAccount: "PAN PAN BAKE", qrNumber: "010-12-XX-XXXXXXX-001",
+};
+
+const INITIAL_CATEGORIES = [
+  { id: "bakery", label: "🥐 ເຂົ້າໜົມ", labelEn: "Bakery" },
+  { id: "coffee", label: "☕ ກາເຟ", labelEn: "Coffee" },
+  { id: "matcha", label: "🍵 ມັດຊາ", labelEn: "Matcha" },
+  { id: "smoothie", label: "🥤 ສະມູດທີ", labelEn: "Smoothie" },
+  { id: "drinks", label: "🧃 ເຄື່ອງດື່ມ", labelEn: "Drinks" },
+];
+
+// Categories that support add-ons (milk swap, extra shots, etc.)
+const ADDON_CATEGORIES = ["coffee", "matcha"];
+
+const DEFAULT_ADDONS = [
+  { id: "oat", name: "Oat Milk", nameLao: "ນົມໂອ໋ດ", price: 5000, group: "milk" },
+  { id: "almond", name: "Almond Milk", nameLao: "ນົມອັນມັນ", price: 5000, group: "milk" },
+  { id: "soy", name: "Soy Milk", nameLao: "ນົມຖົ່ວເຫຼືອງ", price: 5000, group: "milk" },
+  { id: "lactose_free", name: "Lactose-Free Milk", nameLao: "ນົມບໍ່ມີນ້ຳຕານ", price: 5000, group: "milk" },
+  { id: "extra_shot", name: "Extra Espresso Shot", nameLao: "ເພີ່ມ Shot", price: 5000, group: "extra" },
+  { id: "vanilla", name: "Vanilla Syrup", nameLao: "ນ້ຳຕານວານີລາ", price: 3000, group: "syrup" },
+  { id: "caramel", name: "Caramel Syrup", nameLao: "ນ້ຳຕານຄາຣາເມລ", price: 3000, group: "syrup" },
+  { id: "hazelnut", name: "Hazelnut Syrup", nameLao: "ນ້ຳຕານ Hazelnut", price: 3000, group: "syrup" },
+  { id: "whip", name: "Whipped Cream", nameLao: "ວິບຄຣີມ", price: 3000, group: "topping" },
+];
+
+const ADDON_GROUPS = {
+  milk: "🥛 ປ່ຽນນົມ / Milk",
+  extra: "☕ ເພີ່ມ / Extra",
+  syrup: "🍯 ນ້ຳຕານ / Syrup",
+  topping: "🍦 Topping",
+};
+
+const EXPENSE_CATS = {
+  fixed: [
+    { id: "rent", label: "🏠 ຄ່າເຊົ່າ" }, { id: "salary", label: "👥 ເງິນເດືອນ" },
+    { id: "internet", label: "📡 ອິນເຕີເນັດ" }, { id: "insurance", label: "🛡️ ປະກັນໄພ" },
+    { id: "loan", label: "🏦 ດອກເບ້ຍ/ເງິນກູ້" }, { id: "other_fixed", label: "📌 ຄົງທີ່ອື່ນໆ" },
+  ],
+  variable: [
+    { id: "ingredients", label: "🌾 ວັດຖຸດິບ (COGS)" }, { id: "packaging", label: "📦 ບັນຈຸພັນ (COGS)" },
+    { id: "electricity", label: "⚡ ຄ່າໄຟຟ້າ" }, { id: "water", label: "💧 ຄ່ານ້ຳ" },
+    { id: "gas", label: "🔥 ຄ່າແກ໊ສ" }, { id: "marketing", label: "📢 ການຕະຫຼາດ" },
+    { id: "delivery", label: "🛵 ຂົນສົ່ງ" }, { id: "supplies", label: "🧽 ຂອງໃຊ້" },
+    { id: "maintenance", label: "🔧 ບຳລຸງຮັກສາ" }, { id: "other_var", label: "📌 ແປຜັນອື່ນໆ" },
+  ],
+};
+const COGS_IDS = ["ingredients", "packaging"];
+
+const INITIAL_MENU = [
+  { id: 1, cat: "bakery", name: "Croissant", nameLao: "ຄວາຊ໊ອງ", price: 15000, emoji: "🥐", popular: true },
+  { id: 2, cat: "bakery", name: "Pain au Chocolat", nameLao: "ເຂົ້າໜົມຊ໊ອກໂກແລດ", price: 18000, emoji: "🍫" },
+  { id: 3, cat: "bakery", name: "Cinnamon Roll", nameLao: "ໂຣນສິນນາມອນ", price: 20000, emoji: "🌀", popular: true },
+  { id: 4, cat: "bakery", name: "Banana Bread", nameLao: "ເຂົ້າໜົມໝາກກ້ວຍ", price: 18000, emoji: "🍌" },
+  { id: 5, cat: "bakery", name: "Blueberry Muffin", nameLao: "ມັຟຟິນໝາກໄມ້", price: 15000, emoji: "🫐" },
+  { id: 6, cat: "bakery", name: "Chocolate Cake", nameLao: "ເຄັກຊ໊ອກໂກແລດ", price: 25000, emoji: "🎂", popular: true },
+  { id: 7, cat: "bakery", name: "Cheesecake", nameLao: "ຊີດເຄັກ", price: 28000, emoji: "🍰" },
+  { id: 8, cat: "bakery", name: "Strawberry Tart", nameLao: "ທາດໝາກສະຕໍ", price: 22000, emoji: "🍓" },
+  { id: 9, cat: "bakery", name: "Almond Croissant", nameLao: "ຄວາຊ໊ອງໝາກຖົ່ວ", price: 20000, emoji: "🌾" },
+  { id: 10, cat: "bakery", name: "Sourdough Loaf", nameLao: "Sourdough", price: 45000, emoji: "🍞" },
+  { id: 11, cat: "bakery", name: "Baguette", nameLao: "ເຂົ້າໜົມຝຣັ່ງ", price: 15000, emoji: "🥖" },
+  { id: 12, cat: "bakery", name: "Danish Pastry", nameLao: "Danish", price: 18000, emoji: "🥮" },
+  { id: 13, cat: "bakery", name: "Carrot Cake", nameLao: "ເຄັກໝາກແຄລອດ", price: 25000, emoji: "🥕" },
+  { id: 14, cat: "bakery", name: "Brownie", nameLao: "ບຣາວນີ", price: 15000, emoji: "🟫", popular: true },
+  { id: 15, cat: "bakery", name: "Cookie", nameLao: "ຄຸກກີ", price: 10000, emoji: "🍪" },
+  { id: 16, cat: "bakery", name: "Macaron (2pcs)", nameLao: "ມາກາຣ໊ອງ", price: 20000, emoji: "🎨" },
+  { id: 17, cat: "bakery", name: "Eclair", nameLao: "ເອັກແລ", price: 18000, emoji: "🍮" },
+  { id: 18, cat: "bakery", name: "Red Velvet", nameLao: "ເຄັກແດງ", price: 28000, emoji: "❤️" },
+  { id: 19, cat: "bakery", name: "Pineapple Danish", nameLao: "Danish ໝາກນັດ", price: 18000, emoji: "🍍" },
+  { id: 20, cat: "bakery", name: "Lemon Tart", nameLao: "ທາດໝາກນາວ", price: 22000, emoji: "🍋" },
+  { id: 21, cat: "bakery", name: "Apple Turnover", nameLao: "ໝາກແອັບ Turnover", price: 20000, emoji: "🍎" },
+  { id: 22, cat: "bakery", name: "Morning Bun", nameLao: "ເຂົ້າໜົມເຊົ້າ", price: 15000, emoji: "☀️" },
+  { id: 23, cat: "bakery", name: "Sesame Roll", nameLao: "ໂຣນໜ້າງາ", price: 12000, emoji: "⚪" },
+  { id: 24, cat: "bakery", name: "Honey Toast", nameLao: "ໂທສນ້ຳເຜິ້ງ", price: 20000, emoji: "🍯" },
+  { id: 25, cat: "bakery", name: "Cream Horn", nameLao: "ໂຄນຄີມ", price: 15000, emoji: "🍦" },
+  { id: 30, cat: "coffee", name: "Espresso", nameLao: "ກາເຟເຂັ້ມ", price: 20000, emoji: "☕", popular: true },
+  { id: 31, cat: "coffee", name: "Americano (Hot)", nameLao: "ອາເມຣິກາໂນ ຮ້ອນ", price: 22000, emoji: "☕" },
+  { id: 32, cat: "coffee", name: "Americano (Iced)", nameLao: "ອາເມຣິກາໂນ ເຢັນ", price: 25000, emoji: "🧊", popular: true },
+  { id: 33, cat: "coffee", name: "Latte (Hot)", nameLao: "ລາເຕ້ ຮ້ອນ", price: 28000, emoji: "☕" },
+  { id: 34, cat: "coffee", name: "Latte (Iced)", nameLao: "ລາເຕ້ ເຢັນ", price: 30000, emoji: "🧊", popular: true },
+  { id: 35, cat: "coffee", name: "Cappuccino", nameLao: "ຄາປູຊີໂນ", price: 28000, emoji: "☕" },
+  { id: 36, cat: "coffee", name: "Flat White", nameLao: "Flat White", price: 28000, emoji: "☕" },
+  { id: 37, cat: "coffee", name: "Mocha (Hot)", nameLao: "ໂມກ້າ ຮ້ອນ", price: 30000, emoji: "☕" },
+  { id: 38, cat: "coffee", name: "Mocha (Iced)", nameLao: "ໂມກ້າ ເຢັນ", price: 32000, emoji: "🧊" },
+  { id: 39, cat: "coffee", name: "Caramel Latte (Iced)", nameLao: "ລາເຕ້ຄາຣາເມລ", price: 35000, emoji: "🧊", popular: true },
+  { id: 40, cat: "coffee", name: "Brown Sugar Oat Latte", nameLao: "ລາເຕ້ໂອ໋ດ", price: 35000, emoji: "🥛" },
+  { id: 50, cat: "matcha", name: "Matcha Latte (Hot)", nameLao: "ມັດຊາ ຮ້ອນ", price: 32000, emoji: "🍵", popular: true },
+  { id: 51, cat: "matcha", name: "Matcha Latte (Iced)", nameLao: "ມັດຊາ ເຢັນ", price: 35000, emoji: "🍵", popular: true },
+  { id: 52, cat: "matcha", name: "Matcha Americano", nameLao: "ມັດຊາ ອາເມຣິກາໂນ", price: 30000, emoji: "🍵" },
+  { id: 53, cat: "matcha", name: "Dirty Matcha", nameLao: "Dirty Matcha", price: 38000, emoji: "🍵" },
+  { id: 54, cat: "matcha", name: "Matcha Smoothie", nameLao: "ມັດຊາ ສະມູດທີ", price: 40000, emoji: "🍵" },
+  { id: 60, cat: "smoothie", name: "Mango Smoothie", nameLao: "ສະມູດທີໝາກມ່ວງ", price: 35000, emoji: "🥭", popular: true },
+  { id: 61, cat: "smoothie", name: "Strawberry Smoothie", nameLao: "ສະມູດທີໝາກສະຕໍ", price: 35000, emoji: "🍓" },
+  { id: 62, cat: "smoothie", name: "Banana Smoothie", nameLao: "ສະມູດທີໝາກກ້ວຍ", price: 32000, emoji: "🍌" },
+  { id: 63, cat: "smoothie", name: "Mixed Fruit", nameLao: "ສະມູດທີຫຼາຍໝາກ", price: 38000, emoji: "🍇" },
+  { id: 64, cat: "smoothie", name: "Watermelon Smoothie", nameLao: "ສະມູດທີໝາກໂມ", price: 35000, emoji: "🍉" },
+  { id: 65, cat: "smoothie", name: "Pineapple Smoothie", nameLao: "ສະມູດທີໝາກນັດ", price: 35000, emoji: "🍍" },
+  { id: 70, cat: "drinks", name: "Water 600ml", nameLao: "ນ້ຳດື່ມ", price: 5000, emoji: "💧" },
+  { id: 71, cat: "drinks", name: "Orange Juice (Can)", nameLao: "ນ້ຳໝາກກ້ຽງ", price: 12000, emoji: "🍊" },
+  { id: 72, cat: "drinks", name: "Apple Juice (Can)", nameLao: "ນ້ຳໝາກແອັບ", price: 12000, emoji: "🍎" },
+  { id: 73, cat: "drinks", name: "Sparkling Water", nameLao: "ນ້ຳອັດລົມ", price: 10000, emoji: "✨" },
+  { id: 74, cat: "drinks", name: "Lemon Soda", nameLao: "ໂຊດາໝາກນາວ", price: 20000, emoji: "🍋" },
+];
+
+const formatKip = (n) => new Intl.NumberFormat("lo-LA").format(Math.round(n)) + " ₭";
+const genId = () => Math.random().toString(36).substr(2, 9);
+const fmtDate = (d) => { const x = new Date(d); return `${String(x.getDate()).padStart(2,"0")}/${String(x.getMonth()+1).padStart(2,"0")}/${x.getFullYear()}`; };
+const fmtTime = (d) => { const x = new Date(d); return `${String(x.getHours()).padStart(2,"0")}:${String(x.getMinutes()).padStart(2,"0")}`; };
+const fmtDT = (d) => `${fmtDate(d)} ${fmtTime(d)}`;
+
+// Calculate price including add-ons
+const itemPrice = (item) => item.price + (item.addons || []).reduce((s, a) => s + a.price, 0);
+// Unique key for cart line (item id + addon ids)
+const cartKey = (item) => `${item.id}:${(item.addons || []).map(a => a.id).sort().join(",")}`;
+
+const stor = {
+  get: (k, def) => { try { const v = localStorage.getItem("ppb_" + k); return v ? JSON.parse(v) : def; } catch { return def; } },
+  set: (k, v) => { try { localStorage.setItem("ppb_" + k, JSON.stringify(v)); } catch {} },
+};
+
+// ============================================================
+// PRINT RECEIPT
+// ============================================================
+function printReceipt(order, shopInfo) {
+  const net = order.total - (order.discount || 0);
+  const itemsHtml = order.items.map(it => {
+    const addonText = (it.addons || []).map(a => `+ ${a.nameLao} (${formatKip(a.price)})`).join("<br>");
+    const linePrice = itemPrice(it);
+    return `<tr>
+      <td style="padding:2px 0">${it.emoji} ${it.name}<br><small style="color:#888">${it.nameLao}</small>${addonText ? `<br><small style="color:#7c3aed">${addonText}</small>` : ""}</td>
+      <td style="text-align:right;padding:2px 0">${it.qty}×${formatKip(linePrice)}</td>
+      <td style="text-align:right;padding:2px 0;font-weight:600">${formatKip(linePrice * it.qty)}</td>
+    </tr>`;
+  }).join("");
+
+  const payLabel = order.payment === "cash" ? "💵 ເງິນສົດ" : order.payment === "qr" ? "📲 QR Code" : order.payment === "transfer" ? "🏦 ໂອນ" : "🎁 FOC";
+  const isFOC = order.payment === "foc";
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:'Courier New',monospace;width:80mm;margin:0 auto;font-size:12px;padding:6px;}
+  .header{text-align:center;padding:8px 0;border-bottom:2px solid #000;}
+  .shop-name{font-size:18px;font-weight:900;letter-spacing:2px;}
+  .lao{font-size:11px;color:#555;}
+  .meta{padding:8px 0;border-bottom:1px dashed #aaa;font-size:11px;width:100%;}
+  .meta td:first-child{color:#888;width:40%;}
+  .meta td:last-child{font-weight:600;}
+  .items{width:100%;border-collapse:collapse;padding:8px 0;}
+  .items td{font-size:11px;vertical-align:top;}
+  .divider{border-top:1px dashed #aaa;margin:6px 0;}
+  .row{display:flex;justify-content:space-between;margin:2px 0;font-size:12px;}
+  .grand{font-size:16px;font-weight:900;border-top:2px solid #000;padding-top:6px;margin-top:4px;}
+  .footer{text-align:center;font-size:10px;color:#888;padding:8px 0;border-top:1px dashed #aaa;margin-top:4px;}
+  ${isFOC ? ".foc{text-align:center;font-size:20px;font-weight:900;color:#16a34a;border:2px solid #16a34a;padding:6px;margin:6px 0;}" : ""}
+</style></head><body>
+<div class="header">
+  <div class="shop-name">${shopInfo.name.toUpperCase()}</div>
+  <div class="lao">${shopInfo.nameLao}</div>
+  <div class="lao">${shopInfo.addressEn}</div>
+  <div class="lao">${shopInfo.address}</div>
+  <div class="lao">${shopInfo.phone}</div>
+</div>
+${isFOC ? '<div class="foc">★ FOC / ຟຣີ ★</div>' : ""}
+<table class="meta">
+  <tr><td>ໃບບິນ #</td><td>${order.id.toUpperCase()}</td></tr>
+  <tr><td>ວັນທີ</td><td>${fmtDT(order.date)}</td></tr>
+  <tr><td>ພະນັກງານ</td><td>${order.cashier || "—"}</td></tr>
+  <tr><td>ຈ່າຍ</td><td>${payLabel}</td></tr>
+  ${order.note ? `<tr><td>ໝາຍເຫດ</td><td>${order.note}</td></tr>` : ""}
+  ${order.voidReason ? `<tr><td style="color:#dc2626">★ ຍົກເລີກ</td><td style="color:#dc2626">${order.voidReason}</td></tr>` : ""}
+</table>
+<div class="divider"></div>
+<table class="items">${itemsHtml}</table>
+<div class="divider"></div>
+<div class="row"><span>ລວມ (${order.items.reduce((s,i)=>s+i.qty,0)} ລາຍການ)</span><span>${formatKip(order.total)}</span></div>
+${order.discount > 0 ? `<div class="row" style="color:#dc2626"><span>ສ່ວນຫຼຸດ</span><span>-${formatKip(order.discount)}</span></div>` : ""}
+<div class="row grand"><span>ທັງໝົດ</span><span>${isFOC ? "FOC ★" : formatKip(net)}</span></div>
+${order.payment === "cash" && order.received ? `
+<div class="row" style="color:#16a34a"><span>ຮັບເງິນ</span><span>${formatKip(order.received)}</span></div>
+<div class="row" style="color:#7c3aed"><span>ເງິນທອນ</span><span>${formatKip(order.received - net)}</span></div>` : ""}
+<div class="footer">${shopInfo.footer}</div>
+<script>window.onload=function(){window.focus();window.print();}</script>
+</body></html>`;
+
+  const w = window.open("", "_blank", "width=400,height=600");
+  if (!w) { alert("ກະລຸນາອະນຸຍາດ pop-up"); return; }
+  w.document.write(html);
+  w.document.close();
+}
+
+// ============================================================
+// ADDON SELECTOR MODAL
+// ============================================================
+function AddonModal({ item, addons, onConfirm, onCancel }) {
+  const [selected, setSelected] = useState([]);
+
+  const groups = {};
+  addons.forEach(a => { if (!groups[a.group]) groups[a.group] = []; groups[a.group].push(a); });
+
+  const toggle = (addon) => {
+    const exists = selected.find(s => s.id === addon.id);
+    if (exists) {
+      setSelected(selected.filter(s => s.id !== addon.id));
+    } else {
+      // Milk group is single-select
+      if (addon.group === "milk") {
+        setSelected([...selected.filter(s => s.group !== "milk"), addon]);
+      } else {
+        setSelected([...selected, addon]);
+      }
+    }
+  };
+
+  const addonTotal = selected.reduce((s, a) => s + a.price, 0);
+  const finalPrice = item.price + addonTotal;
+
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000 }}>
+      <div style={{ background:"#fff",borderRadius:16,maxWidth:420,width:"90%",maxHeight:"90vh",display:"flex",flexDirection:"column" }}>
+        <div style={{ padding:"18px 20px",borderBottom:"1px solid #f3f4f6" }}>
+          <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+            <span style={{ fontSize:32 }}>{item.emoji}</span>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:16,fontWeight:700 }}>{item.name}</div>
+              <div style={{ fontSize:12,color:"#6b7280" }}>{item.nameLao} · {formatKip(item.price)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={{ flex:1,overflowY:"auto",padding:"14px 20px" }}>
+          {Object.entries(groups).map(([groupId, groupAddons]) => (
+            <div key={groupId} style={{ marginBottom:16 }}>
+              <div style={{ fontSize:13,fontWeight:700,color:"#1a1a2e",marginBottom:8 }}>
+                {ADDON_GROUPS[groupId] || groupId}
+                {groupId === "milk" && <span style={{ fontSize:10,color:"#6b7280",fontWeight:400,marginLeft:6 }}>(ເລືອກ 1)</span>}
+              </div>
+              <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8 }}>
+                {groupAddons.map(a => {
+                  const isOn = selected.find(s => s.id === a.id);
+                  return (
+                    <button key={a.id} onClick={() => toggle(a)} style={{
+                      padding:"10px 12px",borderRadius:10,cursor:"pointer",textAlign:"left",
+                      border: isOn ? "2px solid #1a1a2e" : "1px solid #e5e7eb",
+                      background: isOn ? "#1a1a2e" : "#fff",
+                      color: isOn ? "#f4d03f" : "#374151",
+                    }}>
+                      <div style={{ fontSize:13,fontWeight:600 }}>{isOn && "✓ "}{a.name}</div>
+                      <div style={{ fontSize:11,color: isOn ? "#fde68a" : "#6b7280" }}>{a.nameLao}</div>
+                      <div style={{ fontSize:12,fontWeight:700,marginTop:3,color: isOn ? "#fde68a" : "#7c3aed" }}>+{formatKip(a.price)}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding:"14px 20px",borderTop:"1px solid #f3f4f6",background:"#f9f6f0" }}>
+          <div style={{ display:"flex",justifyContent:"space-between",marginBottom:10,fontWeight:700,fontSize:16 }}>
+            <span>ລາຄາລວມ</span>
+            <span style={{ color:"#7c3aed" }}>{formatKip(finalPrice)}</span>
+          </div>
+          <div style={{ display:"flex",gap:8 }}>
+            <button onClick={onCancel} style={{ flex:1,padding:12,background:"#f3f4f6",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer" }}>ຍົກເລີກ</button>
+            <button onClick={() => onConfirm(selected)} style={{ flex:2,padding:12,background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມໃສ່ກະຕ່າ</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// RECEIPT MODAL
+// ============================================================
+function ReceiptModal({ order, shopInfo, onClose }) {
+  const net = order.total - (order.discount || 0);
+  const isFOC = order.payment === "foc";
+  const payLabel = order.payment === "cash" ? "💵 ເງິນສົດ" : order.payment === "qr" ? "📲 QR" : order.payment === "transfer" ? "🏦 ໂອນ" : "🎁 FOC";
+
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999 }}>
+      <div style={{ background:"#fff",borderRadius:12,maxWidth:360,width:"90%",fontFamily:"monospace",maxHeight:"92vh",overflowY:"auto" }}>
+        <div style={{ background:"#1a1a2e",color:"#f4d03f",padding:"18px 24px 14px",borderRadius:"12px 12px 0 0",textAlign:"center" }}>
+          <div style={{ fontSize:20,fontWeight:700,letterSpacing:2 }}>{shopInfo.name.toUpperCase()}</div>
+          <div style={{ fontSize:11,color:"#fde68a",marginTop:2 }}>{shopInfo.nameLao}</div>
+        </div>
+        <div style={{ padding:"12px 18px",background:"#f9f6f0",borderBottom:"1px dashed #ccc",fontSize:11,color:"#555",textAlign:"center" }}>
+          <div>{shopInfo.addressEn}</div><div>{shopInfo.address}</div>
+          <div style={{ color:"#888",marginTop:3 }}>{shopInfo.phone}</div>
+        </div>
+        {isFOC && <div style={{ background:"#dcfce7",color:"#16a34a",textAlign:"center",fontWeight:900,fontSize:18,padding:8 }}>★ FOC / ຟຣີ ★</div>}
+        {order.voidReason && <div style={{ background:"#fee2e2",color:"#dc2626",textAlign:"center",fontWeight:700,fontSize:13,padding:8 }}>★ ຍົກເລີກ: {order.voidReason}</div>}
+        <div style={{ padding:"10px 18px",borderBottom:"1px dashed #ddd",fontSize:12,background:"#fff" }}>
+          {[["ໃບບິນ #",order.id.toUpperCase()],["ວັນທີ",fmtDT(order.date)],["ພະນັກງານ",order.cashier||"—"],["ຈ່າຍ",payLabel]].map(([l,v])=>(
+            <div key={l} style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span style={{ color:"#888" }}>{l}</span><span style={{ fontWeight:600 }}>{v}</span></div>
+          ))}
+        </div>
+        <div style={{ padding:"10px 18px",background:"#fff",maxHeight:240,overflowY:"auto" }}>
+          {order.items.map((it,i)=>{
+            const lp = itemPrice(it);
+            return (
+              <div key={i} style={{ marginBottom:8 }}>
+                <div style={{ display:"flex",justifyContent:"space-between",fontSize:13 }}>
+                  <div style={{ fontWeight:500 }}>{it.emoji} {it.name}</div>
+                  <div style={{ fontWeight:600 }}>{formatKip(lp*it.qty)}</div>
+                </div>
+                <div style={{ fontSize:11,color:"#888",display:"flex",justifyContent:"space-between" }}>
+                  <span>{it.nameLao}</span><span>{it.qty} × {formatKip(lp)}</span>
+                </div>
+                {(it.addons || []).map(a => (
+                  <div key={a.id} style={{ fontSize:11,color:"#7c3aed",paddingLeft:14 }}>+ {a.nameLao} ({formatKip(a.price)})</div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ padding:"10px 18px",borderTop:"1px dashed #ddd",background:"#f9f6f0" }}>
+          <div style={{ display:"flex",justifyContent:"space-between",fontSize:13,color:"#666" }}>
+            <span>ລວມ ({order.items.reduce((s,i)=>s+i.qty,0)})</span><span>{formatKip(order.total)}</span>
+          </div>
+          {order.discount > 0 && <div style={{ display:"flex",justifyContent:"space-between",fontSize:13,color:"#dc2626",marginTop:3 }}><span>ສ່ວນຫຼຸດ</span><span>-{formatKip(order.discount)}</span></div>}
+          <div style={{ display:"flex",justifyContent:"space-between",fontSize:18,fontWeight:700,marginTop:8,borderTop:"2px solid #1a1a2e",paddingTop:8 }}>
+            <span>ທັງໝົດ</span>
+            <span style={{ color:isFOC?"#16a34a":"#1a1a2e" }}>{isFOC?"FOC ★":formatKip(net)}</span>
+          </div>
+          {order.payment==="cash" && order.received && (
+            <>
+              <div style={{ display:"flex",justifyContent:"space-between",fontSize:13,marginTop:4,color:"#16a34a" }}><span>ຮັບ</span><span>{formatKip(order.received)}</span></div>
+              <div style={{ display:"flex",justifyContent:"space-between",fontSize:13,color:"#7c3aed" }}><span>ທອນ</span><span>{formatKip(order.received-net)}</span></div>
+            </>
+          )}
+        </div>
+        <div style={{ padding:"8px 18px 14px",textAlign:"center",fontSize:11,color:"#888",background:"#f9f6f0",borderTop:"1px dashed #ddd" }}>{shopInfo.footer}</div>
+        <div style={{ display:"flex",gap:8,padding:"0 16px 16px",background:"#f9f6f0",borderRadius:"0 0 12px 12px" }}>
+          <button onClick={()=>printReceipt(order,shopInfo)} style={{ flex:1,padding:10,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:600,cursor:"pointer",fontSize:14 }}>🖨️ ພິມ</button>
+          <button onClick={onClose} style={{ flex:1,padding:10,background:"#e5e7eb",color:"#374151",border:"none",borderRadius:8,fontWeight:600,cursor:"pointer",fontSize:14 }}>✕ ປິດ</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// QR MODAL
+// ============================================================
+function QRModal({ amount, qrImage, shopInfo, onConfirm, onCancel }) {
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000 }}>
+      <div style={{ background:"#fff",borderRadius:16,padding:24,maxWidth:360,width:"90%",textAlign:"center" }}>
+        <div style={{ fontSize:18,fontWeight:700,marginBottom:4 }}>📲 ສະແກນເພື່ອຈ່າຍ</div>
+        <div style={{ fontSize:12,color:"#6b7280",marginBottom:14 }}>Scan via {shopInfo.qrBank}</div>
+        <div style={{ background:"#f9f6f0",padding:12,borderRadius:12,marginBottom:14 }}>
+          {qrImage ? <img src={qrImage} alt="QR" style={{ width:"100%",maxWidth:240,height:"auto",margin:"0 auto",display:"block",borderRadius:8 }} />
+            : <div style={{ width:200,height:200,margin:"0 auto",background:"#e5e7eb",borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:"#9ca3af" }}>Upload QR in Settings</div>}
+        </div>
+        <div style={{ fontSize:13,fontWeight:600 }}>{shopInfo.qrAccount}</div>
+        <div style={{ fontSize:12,color:"#6b7280",fontFamily:"monospace" }}>{shopInfo.qrNumber}</div>
+        <div style={{ fontSize:24,fontWeight:700,color:"#7c3aed",margin:"10px 0" }}>{formatKip(amount)}</div>
+        <div style={{ display:"flex",gap:8 }}>
+          <button onClick={onCancel} style={{ flex:1,padding:12,background:"#f3f4f6",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer" }}>ຍົກເລີກ</button>
+          <button onClick={onConfirm} style={{ flex:2,padding:12,background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer" }}>✅ ຢືນຢັນຈ່າຍ</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// VOID MODAL
+// ============================================================
+function VoidModal({ order, shopInfo, onVoid, onClose }) {
+  const [reason, setReason] = useState("");
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000 }}>
+      <div style={{ background:"#fff",borderRadius:16,padding:24,maxWidth:400,width:"90%" }}>
+        <div style={{ fontSize:16,fontWeight:700,marginBottom:4 }}>⚠️ ແກ້ໄຂໃບບິນ #{order.id.toUpperCase()}</div>
+        <div style={{ fontSize:12,color:"#6b7280",marginBottom:16 }}>{fmtDT(order.date)} · {formatKip(order.total-(order.discount||0))}</div>
+        <div style={{ background:"#fff7ed",border:"1px solid #fed7aa",borderRadius:8,padding:12,marginBottom:16,fontSize:13 }}>
+          <div style={{ fontWeight:600,marginBottom:6,color:"#c2410c" }}>ທ່ານຕ້ອງການ:</div>
+          <div>1. <b>Void</b> — ຍົກເລີກໃບບິນ<br/>2. <b>ພິມຄືນ</b> — ໃບເດີມ<br/>3. <b>Void Receipt</b> — ໃບຢືນຢັນຍົກເລີກ</div>
+        </div>
+        <input value={reason} onChange={(e)=>setReason(e.target.value)} placeholder="ເຫດຜົນ: ຈ່າຍຜິດ, ສັ່ງຜິດ..."
+          style={{ width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,boxSizing:"border-box",marginBottom:14 }} />
+        <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+          <button onClick={()=>{if(!reason)return alert("ກະລຸນາໃສ່ເຫດຜົນ");onVoid(reason);}} style={{ padding:12,background:"#dc2626",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer" }}>🚫 ຍົກເລີກໃບບິນ</button>
+          <div style={{ display:"flex",gap:8 }}>
+            <button onClick={()=>printReceipt(order,shopInfo)} style={{ flex:1,padding:10,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13 }}>🖨️ ພິມຄືນ</button>
+            <button onClick={()=>printReceipt({...order,voidReason:reason||"Voided"},shopInfo)} style={{ flex:1,padding:10,background:"#ea580c",color:"#fff",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13 }}>📄 Void Receipt</button>
+          </div>
+          <button onClick={onClose} style={{ padding:10,background:"#f3f4f6",border:"none",borderRadius:10,cursor:"pointer",fontSize:13 }}>ປິດ</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// SHIFT MODAL
+// ============================================================
+function ShiftModal({ type, currentShift, sales, onSubmit, onCancel }) {
+  const [cash, setCash] = useState("");
+  const [notes, setNotes] = useState("");
+  const shiftSales = currentShift ? sales.filter(s => !s.voided && s.shiftId === currentShift.id) : [];
+  const cashIn = shiftSales.filter(s=>s.payment==="cash").reduce((a,s)=>a+(s.total-(s.discount||0)),0);
+  const expected = (currentShift?.openingCash||0) + cashIn;
+  const qrR = shiftSales.filter(s=>s.payment==="qr").reduce((a,s)=>a+(s.total-(s.discount||0)),0);
+  const tfR = shiftSales.filter(s=>s.payment==="transfer").reduce((a,s)=>a+(s.total-(s.discount||0)),0);
+
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000 }}>
+      <div style={{ background:"#fff",borderRadius:16,padding:24,maxWidth:420,width:"90%" }}>
+        <div style={{ fontSize:20,fontWeight:700,marginBottom:14 }}>{type==="open"?"🌅 ເປີດກະ":"🌙 ປິດກະ"}</div>
+        {type==="close" && currentShift && (
+          <div style={{ background:"#f9f6f0",padding:12,borderRadius:10,marginBottom:12,fontSize:13 }}>
+            <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ເງິນເລີ່ມ</span><span>{formatKip(currentShift.openingCash)}</span></div>
+            <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:"#16a34a" }}><span>+ ສົດ</span><span>{formatKip(cashIn)}</span></div>
+            <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:"#7c3aed" }}><span>QR</span><span>{formatKip(qrR)}</span></div>
+            <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:"#2563eb" }}><span>ໂອນ</span><span>{formatKip(tfR)}</span></div>
+            <div style={{ display:"flex",justifyContent:"space-between",fontWeight:700,borderTop:"1px solid #e5e7eb",paddingTop:6 }}><span>ຄາດວ່າ</span><span>{formatKip(expected)}</span></div>
+          </div>
+        )}
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontSize:13,color:"#6b7280",marginBottom:4 }}>{type==="open"?"ເງິນສົດເລີ່ມ (₭)":"ເງິນສົດທີ່ນັບໄດ້ (₭)"}</div>
+          <input type="number" value={cash} onChange={e=>setCash(e.target.value)} autoFocus placeholder="0"
+            style={{ width:"100%",padding:"12px 14px",borderRadius:10,border:"1px solid #e5e7eb",fontSize:18,fontWeight:600,boxSizing:"border-box" }} />
+          {type==="close" && cash && (
+            <div style={{ fontSize:13,marginTop:6,color:Number(cash)>=expected?"#16a34a":"#dc2626",fontWeight:600 }}>
+              ສ່ວນຕ່າງ: {formatKip(Number(cash)-expected)}
+            </div>
+          )}
+        </div>
+        <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} placeholder="ໝາຍເຫດ..."
+          style={{ width:"100%",padding:10,borderRadius:10,border:"1px solid #e5e7eb",fontSize:13,boxSizing:"border-box",resize:"none",marginBottom:14 }} />
+        <div style={{ display:"flex",gap:8 }}>
+          <button onClick={onCancel} style={{ flex:1,padding:12,background:"#f3f4f6",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer" }}>ຍົກເລີກ</button>
+          <button onClick={()=>onSubmit({cash:Number(cash)||0,notes,expected,cashIn})} disabled={!cash}
+            style={{ flex:2,padding:12,background:type==="open"?"#16a34a":"#1a1a2e",color:type==="open"?"#fff":"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:cash?"pointer":"not-allowed",opacity:cash?1:0.5 }}>
+            {type==="open"?"✅ ເປີດ":"🔒 ປິດ"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PARK ORDER NAME MODAL
+// ============================================================
+function ParkModal({ onConfirm, onCancel }) {
+  const [name, setName] = useState("");
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000 }}>
+      <div style={{ background:"#fff",borderRadius:16,padding:24,maxWidth:360,width:"90%" }}>
+        <div style={{ fontSize:18,fontWeight:700,marginBottom:4 }}>📋 ພັກໃບສັ່ງ / Park Order</div>
+        <div style={{ fontSize:12,color:"#6b7280",marginBottom:14 }}>ບັນທຶກໄວ້ ແລະ ສືບຕໍ່ສັ່ງລາຍຄົນຕໍ່ໄປ</div>
+        <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ຊື່/ໂຕະ/ໝາຍເຫດ</div>
+        <input value={name} onChange={e=>setName(e.target.value)} autoFocus placeholder="ເຊັ່ນ: ໂຕະ 3, ນ້ອງ A, John..."
+          style={{ width:"100%",padding:"12px 14px",borderRadius:10,border:"1px solid #e5e7eb",fontSize:15,boxSizing:"border-box",marginBottom:14 }} />
+        <div style={{ display:"flex",gap:8 }}>
+          <button onClick={onCancel} style={{ flex:1,padding:12,background:"#f3f4f6",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer" }}>ຍົກເລີກ</button>
+          <button onClick={()=>onConfirm(name || `ໂຕະ ${Date.now()%100}`)} style={{ flex:2,padding:12,background:"#ea580c",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer" }}>📋 ພັກໄວ້</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// POS VIEW with parked orders & add-ons
+// ============================================================
+function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrImage, shopInfo, parkedOrders, setParkedOrders }) {
+  const { isMobile } = useWindowSize();
+  const [cat, setCat] = useState(categories[0]?.id || "bakery");
+  const [cart, setCart] = useState([]);
+  const [search, setSearch] = useState("");
+  const [payment, setPayment] = useState("cash");
+  const [received, setReceived] = useState("");
+  const [discount, setDiscount] = useState(0);
+  const [note, setNote] = useState("");
+  const [receipt, setReceipt] = useState(null);
+  const [showCheckout, setShowCheckout] = useState(false);
+  const [showQR, setShowQR] = useState(false);
+  const [focReason, setFocReason] = useState("");
+  const [addonItem, setAddonItem] = useState(null);
+  const [parkedId, setParkedId] = useState(null); // resumed parked order id
+  const [parkedName, setParkedName] = useState("");
+  const [showParkModal, setShowParkModal] = useState(false);
+  const [showParkedList, setShowParkedList] = useState(false);
+  const [showCartMobile, setShowCartMobile] = useState(false); // Mobile cart modal state
+
+  useEffect(() => { if (!categories.find(c=>c.id===cat)) setCat(categories[0]?.id); }, [categories]);
+
+  const filtered = menu.filter(m => m.cat===cat && (search==="" || m.name.toLowerCase().includes(search.toLowerCase()) || m.nameLao.includes(search)));
+
+  const onMenuClick = (item) => {
+    // If category supports add-ons → show modal
+    if (ADDON_CATEGORIES.includes(item.cat) && addons.length > 0) {
+      setAddonItem(item);
+    } else {
+      addToCart(item, []);
+    }
+  };
+
+  const addToCart = (item, selectedAddons) => {
+    const newItem = { ...item, addons: selectedAddons };
+    const key = cartKey(newItem);
+    setCart(prev => {
+      const ex = prev.find(c => cartKey(c) === key);
+      if (ex) return prev.map(c => cartKey(c) === key ? { ...c, qty: c.qty + 1 } : c);
+      return [...prev, { ...newItem, qty: 1 }];
+    });
+  };
+
+  const updateQty = (key, d) => setCart(prev => prev.map(c => cartKey(c)===key ? {...c, qty: Math.max(0, c.qty+d)} : c).filter(c => c.qty > 0));
+
+  const subtotal = cart.reduce((s,c) => s + itemPrice(c) * c.qty, 0);
+  const total = Math.max(0, subtotal - discount);
+  const change = payment==="cash" && received ? Number(received) - total : 0;
+
+  const clearCart = () => {
+    setCart([]); setDiscount(0); setReceived(""); setNote(""); setFocReason("");
+    setShowCheckout(false); setShowQR(false); setParkedId(null); setParkedName("");
+    setPayment("cash");
+  };
+
+  const finalize = (pmtOverride) => {
+    const p = pmtOverride || payment;
+    if (cart.length === 0) return;
+    const order = {
+      id: genId(), date: new Date().toISOString(),
+      items: cart, total: subtotal, discount, payment: p,
+      received: p==="cash" ? Number(received) : null,
+      note: p==="foc" ? (focReason || "FOC") : note,
+      cashier, shiftId: currentShift?.id, voided: false,
+      parkedName: parkedName || null,
+    };
+    onSale(order);
+    setReceipt(order);
+    // remove from parked if this was a resumed order
+    if (parkedId) setParkedOrders(parkedOrders.filter(p => p.id !== parkedId));
+    clearCart();
+  };
+
+  const checkout = () => {
+    if (cart.length === 0) return;
+    if (payment === "qr") { setShowQR(true); return; }
+    finalize();
+  };
+
+  const parkOrder = (name) => {
+    const parked = {
+      id: parkedId || genId(),
+      name, items: cart, discount, note,
+      parkedAt: new Date().toISOString(),
+      cashier,
+    };
+    const updated = parkedId
+      ? parkedOrders.map(p => p.id === parkedId ? parked : p)
+      : [...parkedOrders, parked];
+    setParkedOrders(updated);
+    clearCart();
+    setShowParkModal(false);
+  };
+
+  const resumeParked = (parked) => {
+    setCart(parked.items);
+    setDiscount(parked.discount || 0);
+    setNote(parked.note || "");
+    setParkedId(parked.id);
+    setParkedName(parked.name);
+    setShowParkedList(false);
+  };
+
+  const deleteParked = (id) => {
+    if (!window.confirm("ລຶບລາຍການພັກ?")) return;
+    setParkedOrders(parkedOrders.filter(p => p.id !== id));
+  };
+
+  if (!currentShift) return (
+    <div style={{ display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#f0ece4",fontFamily:"'Noto Sans Lao',sans-serif",flexDirection:"column",gap:12 }}>
+      <div style={{ fontSize:60 }}>🌅</div>
+      <div style={{ fontSize:18,fontWeight:700 }}>ກະຍັງບໍ່ໄດ້ເປີດ</div>
+      <div style={{ fontSize:13,color:"#6b7280" }}>ໄປທີ່ "ກະ" ເພື່ອເປີດກ່ອນ</div>
+    </div>
+  );
+
+  return (
+    <div style={{ display:"flex",width:"100%",height:"100vh",fontFamily:"'Noto Sans Lao','Segoe UI',sans-serif",background:"#f0ece4",overflow:"hidden" }}>
+      <div style={{ flex:1,minWidth:0,display:"flex",flexDirection:"column",overflowY:"auto" }}>
+        <div style={{ padding:"10px 14px",background:"#1a1a2e",display:"flex",gap:8,alignItems:"center" }}>
+          <input placeholder="🔍 ຄົ້ນຫາ..." value={search} onChange={e=>setSearch(e.target.value)}
+            style={{ flex:1,padding:"10px 14px",borderRadius:10,border:"none",background:"rgba(255,255,255,0.15)",color:"#fff",fontSize:14,outline:"none" }} />
+          {isMobile && (
+            <button onClick={()=>setShowCartMobile(true)} style={{
+              padding:"10px 14px",borderRadius:10,border:"none",cursor:"pointer",
+              background: cart.length>0 ? "#f4d03f" : "rgba(255,255,255,0.12)",
+              color: cart.length>0 ? "#1a1a2e" : "#fff",fontWeight:700,fontSize:13,position:"relative",whiteSpace:"nowrap"
+            }}>
+              🛒 {cart.reduce((s,c)=>s+c.qty,0)}
+              {cart.length > 0 && (
+                <span style={{ position:"absolute",top:-4,right:-4,background:"#dc2626",color:"#fff",borderRadius:"50%",width:18,height:18,fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center" }}>
+                  {cart.length}
+                </span>
+              )}
+            </button>
+          )}
+          <button onClick={()=>setShowParkedList(true)} style={{
+            padding:"10px 14px",borderRadius:10,border:"none",cursor:"pointer",
+            background: parkedOrders.length>0 ? "#ea580c" : "rgba(255,255,255,0.12)",
+            color:"#fff",fontWeight:700,fontSize:13,position:"relative",whiteSpace:"nowrap"
+          }}>
+            📋 ພັກໄວ້
+            {parkedOrders.length > 0 && (
+              <span style={{ position:"absolute",top:-4,right:-4,background:"#fff",color:"#ea580c",borderRadius:"50%",width:20,height:20,fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center" }}>
+                {parkedOrders.length}
+              </span>
+            )}
+          </button>
+        </div>
+        {parkedName && (
+          <div style={{ padding:"8px 14px",background:"#fed7aa",fontSize:13,color:"#9a3412",fontWeight:600,display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+            <span>📋 ກຳລັງແກ້ໄຂ: <b>{parkedName}</b></span>
+            <button onClick={clearCart} style={{ padding:"4px 10px",background:"#fff",color:"#9a3412",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>ຍົກເລີກ</button>
+          </div>
+        )}
+        <div style={{ display:"flex",background:"#1a1a2e",padding:"0 8px 8px",gap:6,overflowX:"auto",flexShrink:0,flexWrap:"wrap" }}>
+          {categories.map(c => (
+            <button key={c.id} onClick={()=>setCat(c.id)} style={{
+              padding:"8px 14px",borderRadius:20,border:"none",cursor:"pointer",
+              background:cat===c.id?"#f4d03f":"rgba(255,255,255,0.12)",
+              color:cat===c.id?"#1a1a2e":"#e5e7eb",fontWeight:cat===c.id?700:500,fontSize:13,whiteSpace:"nowrap"
+            }}>{c.label}{ADDON_CATEGORIES.includes(c.id) && " ✨"}</button>
+          ))}
+        </div>
+        <div className="grid-responsive products" style={{ gap:10,padding:14,flex:1,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(148px,1fr))" }}>
+          {filtered.map(item => {
+            const hasAddons = ADDON_CATEGORIES.includes(item.cat) && addons.length > 0;
+            return (
+              <button key={item.id} onClick={()=>onMenuClick(item)} style={{
+                background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,padding:"12px 10px",
+                cursor:"pointer",textAlign:"center",position:"relative",boxShadow:"0 1px 4px rgba(0,0,0,0.06)"
+              }}>
+                {item.popular && <span style={{ position:"absolute",top:6,right:6,background:"#f4d03f",color:"#1a1a2e",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4 }}>🔥</span>}
+                {hasAddons && <span style={{ position:"absolute",top:6,left:6,background:"#ede9fe",color:"#7c3aed",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4 }}>✨</span>}
+                {item.image ? <img src={item.image} alt={item.name} style={{ width:60,height:60,objectFit:"cover",borderRadius:8,margin:"0 auto 6px",display:"block" }} />
+                  : <div style={{ fontSize:30,marginBottom:6 }}>{item.emoji}</div>}
+                <div style={{ fontSize:12,fontWeight:600,color:"#1a1a2e",lineHeight:1.3 }}>{item.name}</div>
+                <div style={{ fontSize:11,color:"#6b7280",marginBottom:6 }}>{item.nameLao}</div>
+                <div style={{ fontSize:13,fontWeight:700,color:"#7c3aed" }}>{formatKip(item.price)}</div>
+              </button>
+            );
+          })}
+          {filtered.length===0 && <div style={{ gridColumn:"1/-1",textAlign:"center",padding:40,color:"#9ca3af" }}>ບໍ່ພົບເມນູ</div>}
+        </div>
+      </div>
+
+      {/* cart - hidden on mobile, shown as sidebar on desktop/tablet */}
+      {!isMobile && (
+      <div style={{ width:340,background:"#fff",display:"flex",flexDirection:"column",borderLeft:"1px solid #e5e7eb" }}>
+        <div style={{ padding:"14px 20px",background:"#1a1a2e",color:"#f4d03f" }}>
+          <div style={{ fontSize:16,fontWeight:700 }}>🛒 ລາຍການ</div>
+          <div style={{ fontSize:12,color:"#9ca3af",marginTop:2 }}>{cart.reduce((s,c)=>s+c.qty,0)} ລາຍການ {parkedName && `· ${parkedName}`}</div>
+        </div>
+        <div style={{ flex:1,overflowY:"auto",padding:"12px 14px" }}>
+          {cart.length===0
+            ? <div style={{ textAlign:"center",padding:40,color:"#9ca3af" }}><div style={{ fontSize:40 }}>🧺</div><div style={{ marginTop:8,fontSize:13 }}>ຍັງບໍ່ມີລາຍການ</div></div>
+            : cart.map(item => {
+              const key = cartKey(item);
+              const lp = itemPrice(item);
+              return (
+                <div key={key} style={{ padding:"8px 0",borderBottom:"1px solid #f3f4f6" }}>
+                  <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+                    <span style={{ fontSize:20 }}>{item.emoji}</span>
+                    <div style={{ flex:1,minWidth:0 }}>
+                      <div style={{ fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{item.name}</div>
+                      <div style={{ fontSize:11,color:"#7c3aed",fontWeight:600 }}>{formatKip(lp)}</div>
+                    </div>
+                    <div style={{ display:"flex",alignItems:"center",gap:5 }}>
+                      <button onClick={()=>updateQty(key,-1)} style={{ width:24,height:24,borderRadius:"50%",border:"1px solid #e5e7eb",background:"#f9fafb",cursor:"pointer",fontWeight:700 }}>-</button>
+                      <span style={{ fontSize:13,fontWeight:700,minWidth:18,textAlign:"center" }}>{item.qty}</span>
+                      <button onClick={()=>updateQty(key,1)} style={{ width:24,height:24,borderRadius:"50%",border:"none",background:"#1a1a2e",color:"#f4d03f",cursor:"pointer",fontWeight:700 }}>+</button>
+                    </div>
+                    <div style={{ fontSize:13,fontWeight:700,minWidth:65,textAlign:"right" }}>{formatKip(lp*item.qty)}</div>
+                  </div>
+                  {(item.addons || []).length > 0 && (
+                    <div style={{ paddingLeft:28,marginTop:2 }}>
+                      {item.addons.map(a => (
+                        <div key={a.id} style={{ fontSize:11,color:"#7c3aed" }}>+ {a.nameLao} <span style={{ color:"#9ca3af" }}>({formatKip(a.price)})</span></div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          }
+        </div>
+        {cart.length>0 && !showCheckout && (
+          <div style={{ padding:"10px 14px",borderTop:"1px solid #f3f4f6" }}>
+            <div style={{ display:"flex",justifyContent:"space-between",marginBottom:8 }}>
+              <span style={{ color:"#6b7280",fontSize:14 }}>ລວມ</span>
+              <span style={{ fontWeight:700,fontSize:16 }}>{formatKip(subtotal)}</span>
+            </div>
+            <button onClick={()=>setShowCheckout(true)} style={{ width:"100%",padding:13,background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:10,fontWeight:700,fontSize:15,cursor:"pointer" }}>ຊຳລະ →</button>
+            <div style={{ display:"flex",gap:6,marginTop:6 }}>
+              <button onClick={()=>setShowParkModal(true)} style={{ flex:1,padding:8,background:"#ea580c",color:"#fff",border:"none",borderRadius:8,fontWeight:600,fontSize:12,cursor:"pointer" }}>📋 ພັກໄວ້</button>
+              <button onClick={clearCart} style={{ flex:1,padding:8,background:"transparent",color:"#dc2626",border:"1px solid #fee2e2",borderRadius:8,fontSize:12,cursor:"pointer" }}>✕ ລ້າງ</button>
+            </div>
+          </div>
+        )}
+        {showCheckout && (
+          <div style={{ padding:14,borderTop:"2px solid #1a1a2e",background:"#f9f6f0" }}>
+            <div style={{ marginBottom:10 }}>
+              <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ສ່ວນຫຼຸດ (₭)</div>
+              <input type="number" placeholder="0" value={discount||""} onChange={e=>setDiscount(Number(e.target.value))}
+                style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" }} />
+            </div>
+            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:10 }}>
+              {[["cash","💵","ສົດ"],["qr","📲","QR"],["transfer","🏦","ໂອນ"],["foc","🎁","FOC"]].map(([v,ic,l]) => (
+                <button key={v} onClick={()=>setPayment(v)} style={{
+                  padding:"8px 4px",borderRadius:8,border:payment===v?"2px solid #1a1a2e":"1px solid #e5e7eb",
+                  background:payment===v?"#1a1a2e":"#fff",color:payment===v?"#f4d03f":"#374151",
+                  fontWeight:payment===v?700:500,cursor:"pointer",fontSize:12
+                }}><div style={{ fontSize:16 }}>{ic}</div>{l}</button>
+              ))}
+            </div>
+            {payment==="cash" && (
+              <div style={{ marginBottom:10 }}>
+                <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ຮັບເງິນ (₭)</div>
+                <input type="number" placeholder="ໃສ່ຈຳນວນ" value={received} onChange={e=>setReceived(e.target.value)}
+                  style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" }} />
+                {received && <div style={{ fontSize:13,marginTop:4,color:"#16a34a",fontWeight:600 }}>ທອນ: {formatKip(Math.max(0,change))}</div>}
+              </div>
+            )}
+            {payment==="foc" && (
+              <div style={{ background:"#dcfce7",border:"1px solid #86efac",borderRadius:8,padding:10,marginBottom:10,fontSize:12 }}>
+                🎁 <b>FOC</b> — ບັນທຶກເປັນ 0 ₭<br/>
+                <input value={focReason} onChange={e=>setFocReason(e.target.value)} placeholder="ເຫດຜົນ (ບໍ່ບັງຄັບ)"
+                  style={{ width:"100%",padding:"6px 8px",marginTop:6,borderRadius:6,border:"1px solid #86efac",fontSize:12,boxSizing:"border-box" }} />
+              </div>
+            )}
+            <input placeholder="ໝາຍເຫດ..." value={note} onChange={e=>setNote(e.target.value)}
+              style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,marginBottom:10,boxSizing:"border-box" }} />
+            <div style={{ display:"flex",justifyContent:"space-between",fontWeight:700,fontSize:18,marginBottom:10 }}>
+              <span>ທັງໝົດ</span>
+              <span style={{ color:payment==="foc"?"#16a34a":"#7c3aed" }}>{payment==="foc"?"FOC ★":formatKip(total)}</span>
+            </div>
+            <button onClick={checkout} disabled={payment==="cash" && (!received||Number(received)<total)}
+              style={{ width:"100%",padding:13,background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,fontSize:15,cursor:"pointer",opacity:(payment==="cash"&&(!received||Number(received)<total))?0.5:1 }}>
+              {payment==="qr"?"📲 ສ້າງ QR":payment==="foc"?"🎁 ຢືນຢັນ FOC":"✅ ຢືນຢັນ"}
+            </button>
+            <button onClick={()=>setShowCheckout(false)} style={{ width:"100%",padding:8,background:"transparent",color:"#6b7280",border:"none",fontSize:13,cursor:"pointer",marginTop:6 }}>← ກັບໄປ</button>
+          </div>
+        )}
+      </div>
+      )}
+
+      {/* Mobile cart modal */}
+      {isMobile && showCartMobile && (
+        <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"flex-end",zIndex:1000 }}>
+          <div onClick={e=>e.stopPropagation()} style={{ width:"100%",maxHeight:"85vh",background:"#fff",borderRadius:"16px 16px 0 0",display:"flex",flexDirection:"column",animation:"slideUp 0.3s ease" }}>
+            <div style={{ padding:"14px 20px",background:"#1a1a2e",color:"#f4d03f",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+              <div>
+                <div style={{ fontSize:16,fontWeight:700 }}>🛒 ລາຍການ</div>
+                <div style={{ fontSize:12,color:"#9ca3af",marginTop:2 }}>{cart.reduce((s,c)=>s+c.qty,0)} ລາຍການ {parkedName && `· ${parkedName}`}</div>
+              </div>
+              <button onClick={()=>setShowCartMobile(false)} style={{ width:32,height:32,borderRadius:8,border:"none",background:"rgba(255,255,255,0.2)",color:"#fff",cursor:"pointer",fontSize:18 }}>✕</button>
+            </div>
+            <div style={{ flex:1,overflowY:"auto",padding:"12px 14px" }}>
+              {cart.length===0
+                ? <div style={{ textAlign:"center",padding:40,color:"#9ca3af" }}><div style={{ fontSize:40 }}>🧺</div><div style={{ marginTop:8,fontSize:13 }}>ຍັງບໍ່ມີລາຍການ</div></div>
+                : cart.map(item => {
+                  const key = cartKey(item);
+                  const lp = itemPrice(item);
+                  return (
+                    <div key={key} style={{ padding:"8px 0",borderBottom:"1px solid #f3f4f6" }}>
+                      <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+                        <span style={{ fontSize:20 }}>{item.emoji}</span>
+                        <div style={{ flex:1,minWidth:0 }}>
+                          <div style={{ fontSize:13,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{item.name}</div>
+                          <div style={{ fontSize:11,color:"#7c3aed",fontWeight:600 }}>{formatKip(lp)}</div>
+                        </div>
+                        <div style={{ display:"flex",alignItems:"center",gap:5 }}>
+                          <button onClick={()=>updateQty(key,-1)} style={{ width:24,height:24,borderRadius:"50%",border:"1px solid #e5e7eb",background:"#f9fafb",cursor:"pointer",fontWeight:700 }}>-</button>
+                          <span style={{ fontSize:13,fontWeight:700,minWidth:18,textAlign:"center" }}>{item.qty}</span>
+                          <button onClick={()=>updateQty(key,1)} style={{ width:24,height:24,borderRadius:"50%",border:"none",background:"#1a1a2e",color:"#f4d03f",cursor:"pointer",fontWeight:700 }}>+</button>
+                        </div>
+                        <div style={{ fontSize:13,fontWeight:700,minWidth:65,textAlign:"right" }}>{formatKip(lp*item.qty)}</div>
+                      </div>
+                      {(item.addons || []).length > 0 && (
+                        <div style={{ paddingLeft:28,marginTop:2 }}>
+                          {item.addons.map(a => (
+                            <div key={a.id} style={{ fontSize:11,color:"#7c3aed" }}>+ {a.nameLao} <span style={{ color:"#9ca3af" }}>({formatKip(a.price)})</span></div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              }
+            </div>
+            {cart.length>0 && !showCheckout && (
+              <div style={{ padding:"10px 14px",borderTop:"1px solid #f3f4f6" }}>
+                <div style={{ display:"flex",justifyContent:"space-between",marginBottom:8 }}>
+                  <span style={{ color:"#6b7280",fontSize:14 }}>ລວມ</span>
+                  <span style={{ fontWeight:700,fontSize:16 }}>{formatKip(subtotal)}</span>
+                </div>
+                <button onClick={()=>{setShowCheckout(true); setShowCartMobile(false);}} style={{ width:"100%",padding:13,background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:10,fontWeight:700,fontSize:15,cursor:"pointer" }}>ຊຳລະ →</button>
+                <div style={{ display:"flex",gap:6,marginTop:6 }}>
+                  <button onClick={()=>setShowParkModal(true)} style={{ flex:1,padding:8,background:"#ea580c",color:"#fff",border:"none",borderRadius:8,fontWeight:600,fontSize:12,cursor:"pointer" }}>📋 ພັກໄວ້</button>
+                  <button onClick={clearCart} style={{ flex:1,padding:8,background:"transparent",color:"#dc2626",border:"1px solid #fee2e2",borderRadius:8,fontSize:12,cursor:"pointer" }}>✕ ລ້າງ</button>
+                </div>
+              </div>
+            )}
+            {showCheckout && (
+              <div style={{ padding:14,borderTop:"2px solid #1a1a2e",background:"#f9f6f0" }}>
+                <div style={{ marginBottom:10 }}>
+                  <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ສ່ວນຫຼຸດ (₭)</div>
+                  <input type="number" placeholder="0" value={discount||""} onChange={e=>setDiscount(Number(e.target.value))}
+                    style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" }} />
+                </div>
+                <div className="grid-responsive payment-grid" style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:10 }}>
+                  {[["cash","💵","ສົດ"],["qr","📲","QR"],["transfer","🏦","ໂອນ"],["foc","🎁","FOC"]].map(([v,ic,l]) => (
+                    <button key={v} onClick={()=>setPayment(v)} style={{
+                      padding:"8px 4px",borderRadius:8,border:payment===v?"2px solid #1a1a2e":"1px solid #e5e7eb",
+                      background:payment===v?"#1a1a2e":"#fff",color:payment===v?"#f4d03f":"#374151",
+                      fontWeight:payment===v?700:500,cursor:"pointer",fontSize:12
+                    }}><div style={{ fontSize:16 }}>{ic}</div>{l}</button>
+                  ))}
+                </div>
+                {payment==="cash" && (
+                  <div style={{ marginBottom:10 }}>
+                    <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ຮັບເງິນ (₭)</div>
+                    <input type="number" placeholder="ໃສ່ຈຳນວນ" value={received} onChange={e=>setReceived(e.target.value)}
+                      style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" }} />
+                    {received && <div style={{ fontSize:13,marginTop:4,color:"#16a34a",fontWeight:600 }}>ທອນ: {formatKip(Math.max(0,change))}</div>}
+                  </div>
+                )}
+                {payment==="foc" && (
+                  <div style={{ background:"#dcfce7",border:"1px solid #86efac",borderRadius:8,padding:10,marginBottom:10,fontSize:12 }}>
+                    🎁 <b>FOC</b> — ບັນທຶກເປັນ 0 ₭<br/>
+                    <input value={focReason} onChange={e=>setFocReason(e.target.value)} placeholder="ເຫດຜົນ (ບໍ່ບັງຄັບ)"
+                      style={{ width:"100%",padding:"6px 8px",marginTop:6,borderRadius:6,border:"1px solid #86efac",fontSize:12,boxSizing:"border-box" }} />
+                  </div>
+                )}
+                <input placeholder="ໝາຍເຫດ..." value={note} onChange={e=>setNote(e.target.value)}
+                  style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,marginBottom:10,boxSizing:"border-box" }} />
+                <div style={{ display:"flex",justifyContent:"space-between",fontWeight:700,fontSize:18,marginBottom:10 }}>
+                  <span>ທັງໝົດ</span>
+                  <span style={{ color:payment==="foc"?"#16a34a":"#7c3aed" }}>{payment==="foc"?"FOC ★":formatKip(total)}</span>
+                </div>
+                <button onClick={checkout} disabled={payment==="cash" && (!received||Number(received)<total)}
+                  style={{ width:"100%",padding:13,background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,fontSize:15,cursor:"pointer",opacity:(payment==="cash"&&(!received||Number(received)<total))?0.5:1 }}>
+                  {payment==="qr"?"📲 ສ້າງ QR":payment==="foc"?"🎁 ຢືນຢັນ FOC":"✅ ຢືນຢັນ"}
+                </button>
+                <button onClick={()=>setShowCheckout(false)} style={{ width:"100%",padding:8,background:"transparent",color:"#6b7280",border:"none",fontSize:13,cursor:"pointer",marginTop:6 }}>← ກັບໄປ</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Parked orders list overlay */}
+      {showParkedList && (
+        <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:998 }} onClick={()=>setShowParkedList(false)}>
+          <div onClick={e=>e.stopPropagation()} style={{ background:"#fff",borderRadius:16,maxWidth:480,width:"90%",maxHeight:"80vh",display:"flex",flexDirection:"column" }}>
+            <div style={{ padding:"18px 20px",borderBottom:"1px solid #f3f4f6",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+              <div>
+                <div style={{ fontSize:17,fontWeight:700 }}>📋 ໃບສັ່ງທີ່ພັກໄວ້</div>
+                <div style={{ fontSize:12,color:"#6b7280" }}>{parkedOrders.length} ໃບ — ກົດເພື່ອສືບຕໍ່</div>
+              </div>
+              <button onClick={()=>setShowParkedList(false)} style={{ width:32,height:32,borderRadius:8,border:"none",background:"#f3f4f6",cursor:"pointer" }}>✕</button>
+            </div>
+            <div style={{ flex:1,overflowY:"auto",padding:"10px 14px" }}>
+              {parkedOrders.length === 0
+                ? <div style={{ textAlign:"center",padding:40,color:"#9ca3af" }}><div style={{ fontSize:40 }}>📋</div><div style={{ marginTop:8,fontSize:13 }}>ຍັງບໍ່ມີໃບສັ່ງທີ່ພັກໄວ້</div></div>
+                : parkedOrders.map(p => {
+                  const ptotal = p.items.reduce((s,i) => s + itemPrice(i) * i.qty, 0) - (p.discount||0);
+                  return (
+                    <div key={p.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 12px",borderBottom:"1px solid #f3f4f6",borderRadius:8,background:"#fff7ed",marginBottom:6,border:"1px solid #fed7aa" }}>
+                      <div style={{ fontSize:24 }}>📋</div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:14,fontWeight:700,color:"#9a3412" }}>{p.name}</div>
+                        <div style={{ fontSize:12,color:"#6b7280" }}>{fmtTime(p.parkedAt)} · {p.items.reduce((s,i)=>s+i.qty,0)} ລາຍການ</div>
+                        <div style={{ fontSize:11,color:"#9ca3af",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
+                          {p.items.map(i=>`${i.emoji}${i.name}×${i.qty}`).join(" · ")}
+                        </div>
+                      </div>
+                      <div style={{ fontSize:14,fontWeight:700,color:"#7c3aed",minWidth:80,textAlign:"right" }}>{formatKip(ptotal)}</div>
+                      <button onClick={()=>resumeParked(p)} style={{ padding:"8px 12px",background:"#16a34a",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:12 }}>▶ ສືບຕໍ່</button>
+                      <button onClick={()=>deleteParked(p.id)} style={{ padding:"8px 10px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:8,cursor:"pointer",fontSize:12 }}>🗑</button>
+                    </div>
+                  );
+                })
+              }
+            </div>
+          </div>
+        </div>
+      )}
+
+      {addonItem && <AddonModal item={addonItem} addons={addons} onConfirm={(a) => { addToCart(addonItem, a); setAddonItem(null); }} onCancel={()=>setAddonItem(null)} />}
+      {showParkModal && <ParkModal onConfirm={parkOrder} onCancel={()=>setShowParkModal(false)} />}
+      {showQR && <QRModal amount={total} qrImage={qrImage} shopInfo={shopInfo} onConfirm={()=>finalize("qr")} onCancel={()=>setShowQR(false)} />}
+      {receipt && <ReceiptModal order={receipt} shopInfo={shopInfo} onClose={()=>setReceipt(null)} />}
+    </div>
+  );
+}
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+// ── Recharts custom tooltip ──────────────────────────────────
+function KipTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background:"#fff", border:"1px solid #e5e7eb", borderRadius:8, padding:"8px 12px", fontSize:12, boxShadow:"0 2px 8px rgba(0,0,0,0.1)" }}>
+      <div style={{ fontWeight:700, marginBottom:4, color:"#1a1a2e" }}>{label}</div>
+      {payload.map((p,i)=>(
+        <div key={i} style={{ color:p.color || "#7c3aed" }}>
+          {p.name}: {typeof p.value === "number" && p.name !== "ໃບບິນ" ? formatKip(p.value) : p.value}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Sync-status badge ─────────────────────────────────────────
+function SyncBadge() {
+  const [status, setStatus] = useState("checking");
+  useEffect(() => {
+    checkConnection().then(setStatus);
+    const id = setInterval(() => checkConnection().then(setStatus), 30000);
+    return () => clearInterval(id);
+  }, []);
+  const cfg = {
+    online:   { bg:"#dcfce7", color:"#16a34a", label:"🟢 Cloud Sync" },
+    offline:  { bg:"#fed7aa", color:"#ea580c", label:"🟡 Offline" },
+    "no-db":  { bg:"#f3f4f6", color:"#6b7280", label:"⚪ Local Only" },
+    checking: { bg:"#f3f4f6", color:"#6b7280", label:"… Checking" },
+  }[status] || { bg:"#f3f4f6", color:"#6b7280", label:"—" };
+  return (
+    <div style={{ padding:"5px 10px", background:cfg.bg, borderRadius:20, fontSize:11, fontWeight:600, color:cfg.color, whiteSpace:"nowrap" }}>
+      {cfg.label}
+    </div>
+  );
+}
+
+// ── Dashboard ─────────────────────────────────────────────────
+function DashboardView({ sales }) {
+  const [range, setRange] = useState("today");
+  const [aiInsight, setAiInsight] = useState("");
+  const [loadingAI, setLoadingAI] = useState(false);
+  const now = new Date();
+
+  const orderNet = (o) => o.items.reduce((s,i) => s + itemPrice(i)*i.qty, 0) - (o.discount||0);
+
+  const filtered = sales.filter(s => {
+    if (s.voided || s.payment === "foc") return false;
+    const d = new Date(s.date);
+    if (range === "today") return d.toDateString() === now.toDateString();
+    if (range === "week")  { const wk = new Date(now); wk.setDate(now.getDate()-7); return d >= wk; }
+    if (range === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    return true;
+  });
+
+  const totalRevenue = filtered.reduce((s,o) => s + orderNet(o), 0);
+  const totalOrders  = filtered.length;
+  const avg          = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+  const cashSales    = filtered.filter(o=>o.payment==="cash").reduce((s,o)=>s+orderNet(o),0);
+  const qrSales      = filtered.filter(o=>o.payment==="qr").reduce((s,o)=>s+orderNet(o),0);
+  const transferSales= filtered.filter(o=>o.payment==="transfer").reduce((s,o)=>s+orderNet(o),0);
+  const focCount     = sales.filter(s => {
+    if (s.payment !== "foc") return false;
+    const d = new Date(s.date);
+    if (range === "today") return d.toDateString() === now.toDateString();
+    if (range === "week")  { const wk = new Date(now); wk.setDate(now.getDate()-7); return d >= wk; }
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  }).length;
+
+  // Top items
+  const itemCounts = {};
+  filtered.forEach(o => o.items.forEach(it => {
+    if (!itemCounts[it.name]) itemCounts[it.name] = { name:it.name, nameLao:it.nameLao, emoji:it.emoji, qty:0, rev:0 };
+    itemCounts[it.name].qty += it.qty;
+    itemCounts[it.name].rev += itemPrice(it) * it.qty;
+  }));
+  const topItems = Object.values(itemCounts).sort((a,b) => b.qty - a.qty).slice(0, 8);
+
+  // 7-day trend (always last 7 days regardless of range filter)
+  const dayTrend = Array.from({ length:7 }, (_,i) => {
+    const d = new Date(now);
+    d.setDate(now.getDate() - (6-i));
+    const ds = d.toDateString();
+    const daySales = sales.filter(s => !s.voided && s.payment!=="foc" && new Date(s.date).toDateString()===ds);
+    return {
+      date: `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}`,
+      ລາຍຮັບ: daySales.reduce((s,o) => s+orderNet(o), 0),
+      ໃບບິນ: daySales.length,
+    };
+  });
+
+  // Hourly (7am–9pm)
+  const hourly = Array.from({ length:15 }, (_,i) => {
+    const h = i + 7;
+    const hrSales = filtered.filter(o => new Date(o.date).getHours() === h);
+    return {
+      hour: `${h}h`,
+      ລາຍຮັບ: hrSales.reduce((s,o) => s+orderNet(o), 0),
+      ໃບບິນ: hrSales.length,
+    };
+  });
+
+  // Top-6 chart data
+  const topChartData = topItems.slice(0,6).map(it => ({
+    name: it.emoji + " " + it.name.split(" ").slice(0,2).join(" "),
+    ຊິ້ນ: it.qty,
+    ລາຍຮັບ: it.rev,
+  }));
+
+  const BAR_COLORS = ["#7c3aed","#2563eb","#16a34a","#ea580c","#0891b2","#db2777"];
+
+  const getAI = async () => {
+    setLoadingAI(true);
+    const summary = `Pan Pan Bake Vientiane, ${range}: Revenue ${formatKip(totalRevenue)}, Orders ${totalOrders}, Avg ${formatKip(avg)}, Cash ${formatKip(cashSales)}, QR ${formatKip(qrSales)}, FOC ${focCount}, Top: ${topItems.slice(0,5).map(i=>`${i.name}(${i.qty})`).join(", ")}`;
+    try {
+      const res = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, messages:[{ role:"user", content:`Business analyst for Lao bakery. 3-4 actionable insights in Lao+English bullets:\n${summary}` }] }) });
+      const d = await res.json();
+      setAiInsight(d.content?.[0]?.text || "Error");
+    } catch { setAiInsight("ກະລຸນາລອງໃໝ່"); }
+    setLoadingAI(false);
+  };
+
+  return (
+    <div style={{ padding:"20px 24px", fontFamily:"'Noto Sans Lao',sans-serif", background:"#f0ece4", minHeight:"100vh" }}>
+
+      {/* Header */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 }}>
+        <div>
+          <h1 style={{ margin:0, fontSize:22, fontWeight:700 }}>📊 Dashboard</h1>
+          <div style={{ fontSize:13, color:"#6b7280" }}>ລາຍງານຍອດຂາຍ</div>
+        </div>
+        <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+          <SyncBadge />
+          <div style={{ display:"flex", gap:6 }}>
+            {[["today","ມື້ນີ້"],["week","7ວັນ"],["month","ເດືອນ"]].map(([v,l]) => (
+              <button key={v} onClick={()=>setRange(v)} style={{ padding:"8px 14px", borderRadius:20, border:"none", cursor:"pointer", background:range===v?"#1a1a2e":"#fff", color:range===v?"#f4d03f":"#374151", fontWeight:range===v?700:500, fontSize:13 }}>{l}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* KPI Cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))", gap:12, marginBottom:20 }}>
+        {[
+          ["💰","ລາຍໄດ້",formatKip(totalRevenue),"#7c3aed"],
+          ["🧾","ໃບບິນ",totalOrders,"#16a34a"],
+          ["📈","ສະເລ່ຍ",formatKip(avg),"#2563eb"],
+          ["💵","ສົດ",formatKip(cashSales),"#ea580c"],
+          ["📲","QR",formatKip(qrSales),"#7c3aed"],
+          ["🎁","FOC",focCount+" ໃບ","#6b7280"],
+        ].map(([ic,l,v,c]) => (
+          <div key={l} style={{ background:"#fff", borderRadius:12, padding:14, border:"1px solid #e5e7eb" }}>
+            <div style={{ fontSize:20 }}>{ic}</div>
+            <div style={{ fontSize:11, color:"#6b7280", marginTop:4 }}>{l}</div>
+            <div style={{ fontSize:16, fontWeight:700, color:c, marginTop:2 }}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* 7-Day Sales Trend */}
+      <div style={{ background:"#fff", borderRadius:12, padding:16, border:"1px solid #e5e7eb", marginBottom:16 }}>
+        <div style={{ fontSize:14, fontWeight:600, marginBottom:14 }}>📅 ຍອດຂາຍ 7 ວັນຫຼ້າສຸດ</div>
+        <ResponsiveContainer width="100%" height={190}>
+          <BarChart data={dayTrend} margin={{ top:4, right:8, left:0, bottom:4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+            <XAxis dataKey="date" tick={{ fontSize:11, fill:"#6b7280" }} axisLine={false} tickLine={false} />
+            <YAxis tickFormatter={v => v > 0 ? `${(v/1000).toFixed(0)}K` : "0"} tick={{ fontSize:10, fill:"#9ca3af" }} axisLine={false} tickLine={false} width={36} />
+            <Tooltip content={<KipTooltip />} />
+            <Bar dataKey="ລາຍຮັບ" fill="#7c3aed" radius={[5,5,0,0]} maxBarSize={48} />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Peak Hours + Top Products */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, marginBottom:16 }}>
+
+        {/* Peak Hours */}
+        <div style={{ background:"#fff", borderRadius:12, padding:16, border:"1px solid #e5e7eb" }}>
+          <div style={{ fontSize:14, fontWeight:600, marginBottom:14 }}>⏰ ຊົ່ວໂມງຂາຍດີ</div>
+          <ResponsiveContainer width="100%" height={165}>
+            <BarChart data={hourly} margin={{ top:4, right:4, left:-22, bottom:4 }}>
+              <XAxis dataKey="hour" tick={{ fontSize:9, fill:"#9ca3af" }} axisLine={false} tickLine={false} />
+              <YAxis hide />
+              <Tooltip content={<KipTooltip />} />
+              <Bar dataKey="ລາຍຮັບ" radius={[4,4,0,0]} maxBarSize={30}>
+                {hourly.map((entry, i) => (
+                  <Cell key={i} fill={entry.ລາຍຮັບ > 0 ? "#f4d03f" : "#e5e7eb"} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* Top Products */}
+        <div style={{ background:"#fff", borderRadius:12, padding:16, border:"1px solid #e5e7eb" }}>
+          <div style={{ fontSize:14, fontWeight:600, marginBottom:14 }}>🏆 ເມນູຂາຍດີ</div>
+          {topItems.length === 0
+            ? <div style={{ color:"#9ca3af", textAlign:"center", padding:20, fontSize:13 }}>ຍັງບໍ່ມີ</div>
+            : topItems.slice(0,6).map((it, i) => (
+                <div key={it.name} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:9 }}>
+                  <span style={{ width:20, height:20, borderRadius:"50%", background:i<3?"#f4d03f":"#f3f4f6", display:"flex", alignItems:"center", justifyContent:"center", fontSize:10, fontWeight:700, color:i<3?"#1a1a2e":"#6b7280", flexShrink:0 }}>{i+1}</span>
+                  <span style={{ fontSize:15 }}>{it.emoji}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:12, fontWeight:600, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{it.name}</div>
+                    <div style={{ display:"flex", alignItems:"center", gap:4, marginTop:2 }}>
+                      <div style={{ height:4, background:"#7c3aed", borderRadius:2, width:`${(it.qty/topItems[0].qty)*100}%`, minWidth:4 }} />
+                      <span style={{ fontSize:10, color:"#9ca3af", whiteSpace:"nowrap" }}>{it.qty} ຊິ້ນ</span>
+                    </div>
+                  </div>
+                  <div style={{ fontSize:11, fontWeight:700, color:"#7c3aed", whiteSpace:"nowrap" }}>{formatKip(it.rev)}</div>
+                </div>
+              ))
+          }
+        </div>
+      </div>
+
+      {/* Top Products Bar Chart */}
+      {topChartData.length > 0 && (
+        <div style={{ background:"#fff", borderRadius:12, padding:16, border:"1px solid #e5e7eb", marginBottom:16 }}>
+          <div style={{ fontSize:14, fontWeight:600, marginBottom:14 }}>📦 ລາຍຮັບຕາມສິນຄ້າ (Top 6)</div>
+          <ResponsiveContainer width="100%" height={190}>
+            <BarChart data={topChartData} margin={{ top:4, right:8, left:0, bottom:4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+              <XAxis dataKey="name" tick={{ fontSize:10, fill:"#6b7280" }} axisLine={false} tickLine={false} />
+              <YAxis tickFormatter={v => v > 0 ? `${(v/1000).toFixed(0)}K` : "0"} tick={{ fontSize:10, fill:"#9ca3af" }} axisLine={false} tickLine={false} width={36} />
+              <Tooltip content={<KipTooltip />} />
+              <Bar dataKey="ລາຍຮັບ" radius={[5,5,0,0]} maxBarSize={48}>
+                {topChartData.map((_,i) => <Cell key={i} fill={BAR_COLORS[i % BAR_COLORS.length]} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Payment Breakdown */}
+      <div style={{ background:"#fff", borderRadius:12, padding:16, border:"1px solid #e5e7eb", marginBottom:16 }}>
+        <div style={{ fontSize:14, fontWeight:600, marginBottom:14 }}>💳 ວິທີຊຳລະ</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10 }}>
+          {[
+            { label:"💵 ສົດ", value:cashSales, color:"#16a34a" },
+            { label:"📲 QR", value:qrSales, color:"#7c3aed" },
+            { label:"🏦 ໂອນ", value:transferSales, color:"#2563eb" },
+          ].map(m => {
+            const pct = totalRevenue > 0 ? (m.value / totalRevenue * 100) : 0;
+            return (
+              <div key={m.label} style={{ textAlign:"center", padding:10 }}>
+                <div style={{ fontSize:13, marginBottom:6 }}>{m.label}</div>
+                <div style={{ fontSize:15, fontWeight:700, color:m.color }}>{formatKip(m.value)}</div>
+                <div style={{ fontSize:11, color:"#9ca3af", marginTop:2 }}>{pct.toFixed(1)}%</div>
+                <div style={{ height:5, background:"#f3f4f6", borderRadius:3, marginTop:8, overflow:"hidden" }}>
+                  <div style={{ height:"100%", background:m.color, borderRadius:3, width:`${pct}%`, transition:"width 0.5s ease" }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* AI Analysis */}
+      <div style={{ background:"#1a1a2e", borderRadius:12, padding:20 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12 }}>
+          <div style={{ fontSize:15, fontWeight:600, color:"#f4d03f" }}>🤖 AI ວິເຄາະ</div>
+          <button onClick={getAI} disabled={loadingAI} style={{ padding:"8px 14px", background:"#f4d03f", color:"#1a1a2e", border:"none", borderRadius:8, fontWeight:700, cursor:"pointer", fontSize:13, opacity:loadingAI?0.7:1 }}>
+            {loadingAI ? "⏳ ກຳລັງ..." : "✨ ວິເຄາະ"}
+          </button>
+        </div>
+        {aiInsight
+          ? <div style={{ fontSize:13, color:"#e5e7eb", lineHeight:1.8, whiteSpace:"pre-wrap" }}>{aiInsight}</div>
+          : <div style={{ fontSize:13, color:"#6b7280", textAlign:"center", padding:"16px 0" }}>ກົດວິເຄາະ ເພື່ອຮັບຄຳແນະນຳ AI</div>
+        }
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ACCOUNTING (with addons in revenue)
+// ============================================================
+function AccountingView({ sales }) {
+  const [expenses,setExpenses]=useState(()=>stor.get("expenses",[]));
+  const [form,setForm]=useState({name:"",nameLao:"",type:"variable",category:"ingredients",amount:"",month:new Date().toISOString().slice(0,7)});
+  const [sel,setSel]=useState(new Date().toISOString().slice(0,7));
+  const allCats=[...EXPENSE_CATS.fixed,...EXPENSE_CATS.variable];
+
+  useEffect(()=>{
+    const valid=EXPENSE_CATS[form.type].find(c=>c.id===form.category);
+    if(!valid)setForm(f=>({...f,category:EXPENSE_CATS[f.type][0].id}));
+  },[form.type]);
+
+  const saveExp=()=>{ if(!form.name||!form.amount)return; const u=[...expenses,{id:genId(),...form,amount:Number(form.amount)}];setExpenses(u);stor.set("expenses",u);setForm({...form,name:"",nameLao:"",amount:""}); };
+  const delExp=(id)=>{const u=expenses.filter(e=>e.id!==id);setExpenses(u);stor.set("expenses",u);};
+
+  const orderNet = (o) => o.items.reduce((s,i)=>s+itemPrice(i)*i.qty,0) - (o.discount||0);
+  const monthSales=sales.filter(s=>!s.voided&&s.payment!=="foc"&&s.date.startsWith(sel));
+  const revenue=monthSales.reduce((s,o)=>s+orderNet(o),0);
+  const monthExp=expenses.filter(e=>e.month===sel);
+  const cogs=monthExp.filter(e=>COGS_IDS.includes(e.category)).reduce((s,e)=>s+e.amount,0);
+  const grossProfit=revenue-cogs;
+  const fixedTotal=monthExp.filter(e=>e.type==="fixed").reduce((s,e)=>s+e.amount,0);
+  const varNonCogs=monthExp.filter(e=>e.type==="variable"&&!COGS_IDS.includes(e.category)).reduce((s,e)=>s+e.amount,0);
+  const netIncome=grossProfit-fixedTotal-varNonCogs;
+  const gm=revenue>0?(grossProfit/revenue*100):0;
+  const nm=revenue>0?(netIncome/revenue*100):0;
+  const byCat={};
+  monthExp.forEach(e=>{const c=allCats.find(x=>x.id===e.category);const key=c?.id||"other";if(!byCat[key])byCat[key]={...c,items:[],total:0,type:e.type};byCat[key].items.push(e);byCat[key].total+=e.amount;});
+  const sortedCats=Object.values(byCat).sort((a,b)=>b.total-a.total);
+  const totalExpAll=sortedCats.reduce((s,c)=>s+c.total,0);
+  const inpStyle={width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box"};
+
+  return (
+    <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
+        <div><h1 style={{ margin:0,fontSize:22,fontWeight:700 }}>📒 ບັນຊີ</h1><div style={{ fontSize:13,color:"#6b7280" }}>Income Statement</div></div>
+        <input type="month" value={sel} onChange={e=>setSel(e.target.value)} style={{ padding:"8px 12px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14 }} />
+      </div>
+      <div style={{ background:"#fff",borderRadius:12,padding:20,border:"1px solid #e5e7eb",marginBottom:16 }}>
+        <div style={{ fontSize:15,fontWeight:700,marginBottom:14 }}>📊 ລາຍງານ {sel}</div>
+        {[
+          {label:"💰 ລາຍຮັບ (Revenue)",val:revenue,color:"#16a34a",extra:`${monthSales.length} ໃບ`},
+          {label:"− COGS (ວັດຖຸດິບ + ບັນຈຸພັນ)",val:cogs,color:"#dc2626",indent:16},
+          {label:"= ກຳໄລຂັ້ນຕົ້ນ",val:grossProfit,color:"#0891b2",bold:true,extra:`${gm.toFixed(1)}%`,sep:true},
+          {label:"− ຄ່າໃຊ້ຈ່າຍຄົງທີ່",val:fixedTotal,color:"#dc2626",indent:16},
+          {label:"− ຄ່າໃຊ້ຈ່າຍແປຜັນອື່ນ",val:varNonCogs,color:"#dc2626",indent:16},
+          {label:"= ກຳໄລສຸດທິ",val:netIncome,color:netIncome>=0?"#7c3aed":"#dc2626",big:true,extra:`${nm.toFixed(1)}%`,sep2:true},
+        ].map((r,i)=>(
+          <div key={i} style={{ display:"flex",justifyContent:"space-between",padding:r.big?"14px 0":"7px 0",borderTop:r.big?"2px solid #1a1a2e":r.sep||r.sep2?"1px solid #d1d5db":"1px solid #f3f4f6",paddingLeft:r.indent||0 }}>
+            <span style={{ fontSize:r.big?15:13,fontWeight:r.big||r.bold?700:500 }}>{r.label}</span>
+            <span style={{ display:"flex",gap:8,alignItems:"center" }}>
+              {r.extra&&<span style={{ fontSize:11,color:"#6b7280",background:"#f3f4f6",padding:"2px 6px",borderRadius:4 }}>{r.extra}</span>}
+              <span style={{ fontSize:r.big?18:14,fontWeight:700,color:r.color }}>{formatKip(r.val)}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+      <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16 }}>
+        <div style={{ background:"#fff",borderRadius:12,padding:16,border:"1px solid #e5e7eb" }}>
+          <div style={{ fontSize:14,fontWeight:600,marginBottom:14 }}>➕ ເພີ່ມລາຍຈ່າຍ</div>
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10 }}>
+            <select value={form.type} onChange={e=>setForm({...form,type:e.target.value})} style={{ padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13 }}>
+              <option value="fixed">🏠 ຄົງທີ່</option><option value="variable">📦 ແປຜັນ</option>
+            </select>
+            <select value={form.category} onChange={e=>setForm({...form,category:e.target.value})} style={{ padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:12 }}>
+              {EXPENSE_CATS[form.type].map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          </div>
+          {[["ຊື່ (EN)","name","text"],["ຊື່ (ລາວ)","nameLao","text"],["ຈຳນວນ (₭)","amount","number"]].map(([l,k,t])=>(
+            <div key={k} style={{ marginBottom:10 }}>
+              <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>{l}</div>
+              <input type={t} value={form[k]} onChange={e=>setForm({...form,[k]:e.target.value})} style={inpStyle} />
+            </div>
+          ))}
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ເດືອນ</div>
+            <input type="month" value={form.month} onChange={e=>setForm({...form,month:e.target.value})} style={inpStyle} />
+          </div>
+          <button onClick={saveExp} style={{ width:"100%",padding:10,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>ບັນທຶກ</button>
+        </div>
+        <div style={{ background:"#fff",borderRadius:12,padding:16,border:"1px solid #e5e7eb" }}>
+          <div style={{ fontSize:14,fontWeight:600,marginBottom:14 }}>📊 ໝວດໝູ່</div>
+          {sortedCats.length===0?<div style={{ color:"#9ca3af",textAlign:"center",padding:20,fontSize:13 }}>ຍັງບໍ່ມີ</div>:
+            <div style={{ maxHeight:340,overflowY:"auto" }}>
+              {sortedCats.map(c=>{
+                const pct=totalExpAll>0?(c.total/totalExpAll*100):0;
+                const isCogs=COGS_IDS.includes(c.id);
+                return(
+                  <div key={c.id} style={{ marginBottom:12 }}>
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}>
+                      <span style={{ fontSize:12,fontWeight:600 }}>{c.label}{isCogs&&<span style={{ marginLeft:4,fontSize:9,background:"#fef3c7",color:"#d97706",padding:"1px 4px",borderRadius:3 }}>COGS</span>}</span>
+                      <span style={{ fontSize:12,fontWeight:700,color:"#dc2626" }}>{formatKip(c.total)}</span>
+                    </div>
+                    <div style={{ height:5,background:"#f3f4f6",borderRadius:3,overflow:"hidden",marginBottom:3 }}>
+                      <div style={{ height:"100%",width:`${pct}%`,background:c.type==="fixed"?"#7c3aed":isCogs?"#d97706":"#ea580c" }} />
+                    </div>
+                    <div style={{ fontSize:10,color:"#6b7280" }}>{pct.toFixed(1)}% · {c.items.length} ລາຍ</div>
+                  </div>
+                );
+              })}
+            </div>
+          }
+        </div>
+      </div>
+      <div style={{ background:"#fff",borderRadius:12,padding:16,border:"1px solid #e5e7eb" }}>
+        <div style={{ fontSize:14,fontWeight:600,marginBottom:12 }}>📋 ລາຍຈ່າຍທັງໝົດ</div>
+        <div style={{ maxHeight:300,overflowY:"auto" }}>
+          {monthExp.length===0?<div style={{ color:"#9ca3af",textAlign:"center",padding:20,fontSize:13 }}>ຍັງບໍ່ມີ</div>:monthExp.map(e=>{
+            const cat=allCats.find(c=>c.id===e.category);
+            return(
+              <div key={e.id} style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:"1px solid #f3f4f6" }}>
+                <span style={{ fontSize:10,padding:"2px 6px",borderRadius:4,background:e.type==="fixed"?"#ede9fe":"#fef3c7",color:e.type==="fixed"?"#7c3aed":"#d97706" }}>{e.type==="fixed"?"ຄົງ":"ແປ"}</span>
+                <span style={{ fontSize:11,color:"#6b7280",minWidth:80 }}>{cat?.label}</span>
+                <div style={{ flex:1 }}><div style={{ fontSize:13,fontWeight:600 }}>{e.name}</div>{e.nameLao&&<div style={{ fontSize:11,color:"#6b7280" }}>{e.nameLao}</div>}</div>
+                <span style={{ fontSize:13,fontWeight:700,color:"#dc2626" }}>{formatKip(e.amount)}</span>
+                <button onClick={()=>delExp(e.id)} style={{ padding:"4px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>✕</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// SALES HISTORY
+// ============================================================
+function SalesHistoryView({ sales, setSales, shopInfo }) {
+  const [search,setSearch]=useState("");
+  const [voidTarget,setVoidTarget]=useState(null);
+  const voidOrder=(order,reason)=>{
+    const updated=sales.map(s=>s.id===order.id?{...s,voided:true,voidReason:reason,voidedAt:new Date().toISOString()}:s);
+    setSales(updated); stor.set("sales",updated); setVoidTarget(null);
+  };
+  const filtered=sales.filter(s=>s.id.includes(search)||s.items.some(i=>i.name.toLowerCase().includes(search.toLowerCase()))).slice().reverse().slice(0,150);
+
+  return (
+    <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
+        <div><h1 style={{ margin:0,fontSize:22,fontWeight:700 }}>🧾 ປະຫວັດການຂາຍ</h1><div style={{ fontSize:13,color:"#6b7280" }}>{sales.length} ໃບ</div></div>
+        <input placeholder="ຄົ້ນຫາ..." value={search} onChange={e=>setSearch(e.target.value)} style={{ padding:"8px 14px",borderRadius:20,border:"1px solid #e5e7eb",fontSize:13 }} />
+      </div>
+      <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden" }}>
+        {filtered.length===0?<div style={{ padding:40,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີ</div>:filtered.map((s,i)=>{
+          const net=s.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0)-(s.discount||0);
+          const isFOC=s.payment==="foc"; const isVoid=s.voided;
+          return(
+            <div key={s.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderBottom:i<filtered.length-1?"1px solid #f3f4f6":"none",opacity:isVoid?0.5:1,background:isVoid?"#fff5f5":isFOC?"#f0fdf4":"#fff" }}>
+              <div style={{ width:34,height:34,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:isVoid?"#fee2e2":isFOC?"#dcfce7":s.payment==="cash"?"#dcfce7":s.payment==="qr"?"#ede9fe":"#dbeafe",fontSize:16 }}>
+                {isVoid?"🚫":isFOC?"🎁":s.payment==="cash"?"💵":s.payment==="qr"?"📲":"🏦"}
+              </div>
+              <div style={{ flex:1,minWidth:0 }}>
+                <div style={{ fontSize:13,fontWeight:600 }}>
+                  #{s.id.toUpperCase()}
+                  {isVoid&&<span style={{ marginLeft:6,fontSize:10,background:"#fee2e2",color:"#dc2626",padding:"1px 5px",borderRadius:3 }}>VOID</span>}
+                  {isFOC&&<span style={{ marginLeft:6,fontSize:10,background:"#dcfce7",color:"#16a34a",padding:"1px 5px",borderRadius:3 }}>FOC</span>}
+                </div>
+                <div style={{ fontSize:11,color:"#6b7280" }}>{fmtDT(s.date)} · {s.cashier||"—"}</div>
+                <div style={{ fontSize:11,color:"#9ca3af",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
+                  {s.items.map(it=>`${it.emoji}${it.name}×${it.qty}${(it.addons||[]).length>0?` (+${it.addons.length})`:""}`).join(" · ")}
+                </div>
+                {(s.note||s.voidReason)&&<div style={{ fontSize:11,color:"#6b7280" }}>📝 {s.voidReason||s.note}</div>}
+              </div>
+              <div style={{ textAlign:"right",flexShrink:0 }}>
+                <div style={{ fontSize:14,fontWeight:700,color:isVoid?"#9ca3af":isFOC?"#16a34a":"#7c3aed" }}>{isVoid?"—":isFOC?"FOC":formatKip(net)}</div>
+                <div style={{ fontSize:11,color:"#6b7280" }}>{s.payment==="cash"?"ສົດ":s.payment==="qr"?"QR":s.payment==="transfer"?"ໂອນ":"FOC"}</div>
+              </div>
+              <div style={{ display:"flex",gap:4 }}>
+                <button onClick={()=>printReceipt(s,shopInfo)} title="ພິມ" style={{ padding:"5px 8px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>🖨️</button>
+                {!isVoid&&<button onClick={()=>setVoidTarget(s)} title="ຍົກເລີກ" style={{ padding:"5px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>⚠️</button>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {voidTarget&&<VoidModal order={voidTarget} shopInfo={shopInfo} onVoid={(r)=>voidOrder(voidTarget,r)} onClose={()=>setVoidTarget(null)} />}
+    </div>
+  );
+}
+
+// ============================================================
+// ADMIN with Add-ons management
+// ============================================================
+function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons, qrImage, setQrImage, shopInfo, setShopInfo }) {
+  const [tab,setTab]=useState("menu");
+  const [editItem,setEditItem]=useState(null);
+  const [filterCat,setFilterCat]=useState("all");
+  const [form,setForm]=useState({name:"",nameLao:"",price:"",cat:categories[0]?.id||"bakery",emoji:"🍞",popular:false,image:""});
+  const [showAdd,setShowAdd]=useState(false);
+  const [editCat,setEditCat]=useState(null);
+  const [showAddCat,setShowAddCat]=useState(false);
+  const [catForm,setCatForm]=useState({id:"",label:"",labelEn:""});
+  const [editAddon,setEditAddon]=useState(null);
+  const [showAddAddon,setShowAddAddon]=useState(false);
+  const [addonForm,setAddonForm]=useState({name:"",nameLao:"",price:"",group:"milk"});
+  const [shopForm,setShopForm]=useState(shopInfo);
+  const fileRef=useRef(null); const editFileRef=useRef(null); const qrRef=useRef(null);
+
+  const handleImg=(e,target)=>{
+    const f=e.target.files?.[0]; if(!f)return;
+    if(f.size>1024*1024){alert("ໃຫຍ່ເກີນ 1MB");return;}
+    const r=new FileReader();
+    r.onload=(ev)=>{ if(target==="form")setForm(x=>({...x,image:ev.target.result})); else if(target==="edit")setEditItem(x=>({...x,image:ev.target.result})); else{setQrImage(ev.target.result);stor.set("qrImage",ev.target.result);} };
+    r.readAsDataURL(f);
+  };
+
+  const saveNew=()=>{ if(!form.name||!form.price)return; const u=[...menu,{id:Date.now(),...form,price:Number(form.price)}]; setMenu(u);stor.set("menu",u);setShowAdd(false); setForm({name:"",nameLao:"",price:"",cat:categories[0]?.id,emoji:"🍞",popular:false,image:""}); };
+  const saveEdit=()=>{ const u=menu.map(m=>m.id===editItem.id?{...editItem,price:Number(editItem.price)}:m); setMenu(u);stor.set("menu",u);setEditItem(null); };
+  const delItem=(id)=>{ if(!window.confirm("ລຶບ?"))return; const u=menu.filter(m=>m.id!==id); setMenu(u);stor.set("menu",u); };
+
+  const saveCat=()=>{
+    const id=catForm.id||catForm.labelEn.toLowerCase().replace(/[^a-z0-9]/g,"_").slice(0,20);
+    if(!catForm.label||!catForm.labelEn)return;
+    if(!editCat&&categories.find(c=>c.id===id)){alert("ID ຊ້ຳ");return;}
+    const u=editCat ? categories.map(c=>c.id===editCat.id?{id:editCat.id,label:catForm.label,labelEn:catForm.labelEn}:c) : [...categories,{id,label:catForm.label,labelEn:catForm.labelEn}];
+    setCategories(u);stor.set("categories",u);setShowAddCat(false);setEditCat(null);setCatForm({id:"",label:"",labelEn:""});
+  };
+  const startEditCat=(c)=>{setEditCat(c);setCatForm({id:c.id,label:c.label,labelEn:c.labelEn});setShowAddCat(true);};
+  const delCat=(id)=>{ const cnt=menu.filter(m=>m.cat===id).length; if(cnt>0){alert(`ມີ ${cnt} ເມນູ`);return;} if(!window.confirm("ລຶບ?"))return; const u=categories.filter(c=>c.id!==id); setCategories(u);stor.set("categories",u); };
+
+  const saveAddon=()=>{
+    if(!addonForm.name||!addonForm.price)return;
+    const id=editAddon?.id || addonForm.name.toLowerCase().replace(/[^a-z0-9]/g,"_").slice(0,20)+"_"+Date.now().toString(36);
+    const newAddon={id,...addonForm,price:Number(addonForm.price)};
+    const u=editAddon ? addons.map(a=>a.id===editAddon.id?newAddon:a) : [...addons,newAddon];
+    setAddons(u);stor.set("addons",u);setShowAddAddon(false);setEditAddon(null);
+    setAddonForm({name:"",nameLao:"",price:"",group:"milk"});
+  };
+  const startEditAddon=(a)=>{setEditAddon(a);setAddonForm({name:a.name,nameLao:a.nameLao,price:a.price,group:a.group});setShowAddAddon(true);};
+  const delAddon=(id)=>{ if(!window.confirm("ລຶບ?"))return; const u=addons.filter(a=>a.id!==id); setAddons(u);stor.set("addons",u); };
+
+  const saveShop=()=>{setShopInfo(shopForm);stor.set("shopInfo",shopForm);alert("ບັນທຶກສຳເລັດ ✓");};
+
+  const filtered=filterCat==="all"?menu:menu.filter(m=>m.cat===filterCat);
+  const inpStyle={width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box"};
+
+  return (
+    <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
+      <h1 style={{ margin:"0 0 4px",fontSize:22,fontWeight:700 }}>⚙️ ຈັດການລະບົບ</h1>
+      <div style={{ fontSize:13,color:"#6b7280",marginBottom:16 }}>Admin Settings</div>
+      <div style={{ display:"flex",gap:4,marginBottom:16,background:"#fff",padding:4,borderRadius:10,width:"fit-content",flexWrap:"wrap" }}>
+        {[["menu","🍞 ເມນູ"],["categories","📂 ໝວດ"],["addons","✨ Add-ons"],["settings","🏪 ຮ້ານ"],["qr","📲 QR"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setTab(v)} style={{ padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",background:tab===v?"#1a1a2e":"transparent",color:tab===v?"#f4d03f":"#374151",fontWeight:tab===v?700:500,fontSize:13 }}>{l}</button>
+        ))}
+      </div>
+
+      {tab==="menu"&&(
+        <>
+          <div style={{ display:"flex",justifyContent:"space-between",marginBottom:12 }}>
+            <div style={{ fontSize:13,color:"#6b7280" }}>{menu.length} ລາຍການ</div>
+            <button onClick={()=>setShowAdd(!showAdd)} style={{ padding:"10px 18px",background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມ</button>
+          </div>
+          {showAdd&&(
+            <div style={{ background:"#fff",borderRadius:12,padding:18,border:"1px solid #e5e7eb",marginBottom:14 }}>
+              <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10 }}>
+                {[["ຊື່ (EN)","name","text"],["ຊື່ (ລາວ)","nameLao","text"],["ລາຄາ (₭)","price","number"],["Emoji","emoji","text"]].map(([l,k,t])=>(
+                  <div key={k}><div style={{ fontSize:12,color:"#6b7280",marginBottom:3 }}>{l}</div><input type={t} value={form[k]} onChange={e=>setForm({...form,[k]:e.target.value})} style={inpStyle} /></div>
+                ))}
+                <div><div style={{ fontSize:12,color:"#6b7280",marginBottom:3 }}>ໝວດໝູ່</div>
+                  <select value={form.cat} onChange={e=>setForm({...form,cat:e.target.value})} style={inpStyle}>{categories.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}</select>
+                </div>
+                <div>
+                  <div style={{ fontSize:12,color:"#6b7280",marginBottom:3 }}>ຮູບ</div>
+                  <input ref={fileRef} type="file" accept="image/*" onChange={e=>handleImg(e,"form")} style={{ display:"none" }} />
+                  <button onClick={()=>fileRef.current?.click()} style={{ ...inpStyle,background:"#f9f9f9",border:"1px dashed #d1d5db",cursor:"pointer",textAlign:"center" }}>📷 {form.image?"ປ່ຽນ":"ອັບໂຫຼດ"}</button>
+                </div>
+                <div style={{ display:"flex",alignItems:"center",gap:8,paddingTop:20 }}>
+                  {form.image&&<img src={form.image} alt="" style={{ width:44,height:44,borderRadius:8,objectFit:"cover" }} />}
+                  <label style={{ display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:13 }}>
+                    <input type="checkbox" checked={form.popular} onChange={e=>setForm({...form,popular:e.target.checked})} />🔥 ຂາຍດີ
+                  </label>
+                </div>
+              </div>
+              <div style={{ display:"flex",gap:8,marginTop:12 }}>
+                <button onClick={saveNew} style={{ padding:"10px 18px",background:"#16a34a",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>ບັນທຶກ</button>
+                <button onClick={()=>setShowAdd(false)} style={{ padding:"10px 18px",background:"#f3f4f6",border:"none",borderRadius:8,cursor:"pointer" }}>ຍົກເລີກ</button>
+              </div>
+            </div>
+          )}
+          <div style={{ display:"flex",gap:6,marginBottom:12,flexWrap:"wrap" }}>
+            <button onClick={()=>setFilterCat("all")} style={{ padding:"6px 12px",borderRadius:20,border:"none",cursor:"pointer",background:filterCat==="all"?"#1a1a2e":"#fff",color:filterCat==="all"?"#f4d03f":"#374151",fontSize:13 }}>ທັງໝົດ ({menu.length})</button>
+            {categories.map(c=>(
+              <button key={c.id} onClick={()=>setFilterCat(c.id)} style={{ padding:"6px 12px",borderRadius:20,border:"none",cursor:"pointer",background:filterCat===c.id?"#1a1a2e":"#fff",color:filterCat===c.id?"#f4d03f":"#374151",fontSize:13 }}>{c.label} ({menu.filter(m=>m.cat===c.id).length})</button>
+            ))}
+          </div>
+          <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden" }}>
+            {filtered.map((item,idx)=>(
+              editItem?.id===item.id?(
+                <div key={item.id} style={{ padding:"12px 14px",background:"#f0f9ff",borderBottom:"1px solid #e5e7eb" }}>
+                  <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:8 }}>
+                    {[["name","text"],["nameLao","text"],["price","number"],["emoji","text"]].map(([k,t])=>(
+                      <input key={k} type={t} value={editItem[k]} onChange={e=>setEditItem({...editItem,[k]:e.target.value})} style={{ padding:"6px 8px",borderRadius:6,border:"1px solid #bfdbfe",fontSize:13 }} />
+                    ))}
+                    <select value={editItem.cat} onChange={e=>setEditItem({...editItem,cat:e.target.value})} style={{ padding:"6px 8px",borderRadius:6,border:"1px solid #bfdbfe",fontSize:13 }}>
+                      {categories.map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
+                    </select>
+                    <input ref={editFileRef} type="file" accept="image/*" onChange={e=>handleImg(e,"edit")} style={{ display:"none" }} />
+                    <button onClick={()=>editFileRef.current?.click()} style={{ padding:"6px 8px",background:"#fff",border:"1px solid #bfdbfe",borderRadius:6,cursor:"pointer",fontSize:12 }}>📷 {editItem.image?"ປ່ຽນ":"ເພີ່ມ"}</button>
+                    <label style={{ display:"flex",alignItems:"center",gap:6,fontSize:12,cursor:"pointer" }}>
+                      <input type="checkbox" checked={editItem.popular} onChange={e=>setEditItem({...editItem,popular:e.target.checked})} />🔥
+                    </label>
+                  </div>
+                  {editItem.image&&<div style={{ marginTop:8,display:"flex",alignItems:"center",gap:8 }}><img src={editItem.image} alt="" style={{ width:56,height:56,borderRadius:8,objectFit:"cover" }} /><button onClick={()=>setEditItem({...editItem,image:""})} style={{ padding:"4px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>ລຶບຮູບ</button></div>}
+                  <div style={{ display:"flex",gap:8,marginTop:8 }}>
+                    <button onClick={saveEdit} style={{ padding:"6px 14px",background:"#16a34a",color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:13,fontWeight:600 }}>ບັນທຶກ</button>
+                    <button onClick={()=>setEditItem(null)} style={{ padding:"6px 14px",background:"#f3f4f6",border:"none",borderRadius:6,cursor:"pointer",fontSize:13 }}>ຍົກເລີກ</button>
+                  </div>
+                </div>
+              ):(
+                <div key={item.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"9px 14px",borderBottom:idx<filtered.length-1?"1px solid #f3f4f6":"none" }}>
+                  {item.image?<img src={item.image} alt={item.name} style={{ width:38,height:38,borderRadius:7,objectFit:"cover" }} />:<span style={{ fontSize:20,width:38,textAlign:"center" }}>{item.emoji}</span>}
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontSize:13,fontWeight:600 }}>{item.name}{item.popular&&<span style={{ marginLeft:5,fontSize:9,background:"#fef3c7",color:"#d97706",padding:"1px 5px",borderRadius:3 }}>🔥</span>}{ADDON_CATEGORIES.includes(item.cat)&&<span style={{ marginLeft:4,fontSize:9,background:"#ede9fe",color:"#7c3aed",padding:"1px 5px",borderRadius:3 }}>✨</span>}</div>
+                    <div style={{ fontSize:11,color:"#6b7280" }}>{item.nameLao}</div>
+                  </div>
+                  <span style={{ fontSize:11,color:"#6b7280",background:"#f3f4f6",padding:"2px 7px",borderRadius:4 }}>{categories.find(c=>c.id===item.cat)?.labelEn||item.cat}</span>
+                  <span style={{ fontSize:13,fontWeight:700,color:"#7c3aed",minWidth:85,textAlign:"right" }}>{formatKip(item.price)}</span>
+                  <button onClick={()=>setEditItem({...item})} style={{ padding:"5px 10px",background:"#ede9fe",color:"#7c3aed",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontWeight:600 }}>✏️</button>
+                  <button onClick={()=>delItem(item.id)} style={{ padding:"5px 10px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>🗑</button>
+                </div>
+              )
+            ))}
+          </div>
+        </>
+      )}
+
+      {tab==="categories"&&(
+        <>
+          <div style={{ display:"flex",justifyContent:"space-between",marginBottom:12 }}>
+            <div style={{ fontSize:13,color:"#6b7280" }}>{categories.length} ໝວດໝູ່</div>
+            <button onClick={()=>{setEditCat(null);setCatForm({id:"",label:"",labelEn:""});setShowAddCat(!showAddCat);}} style={{ padding:"10px 18px",background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມ</button>
+          </div>
+          {showAddCat&&(
+            <div style={{ background:"#fff",borderRadius:12,padding:18,border:"1px solid #e5e7eb",marginBottom:14 }}>
+              <div style={{ fontWeight:600,marginBottom:12,fontSize:14 }}>{editCat?"✏️ ແກ້ໄຂ":"+ ໃໝ່"}</div>
+              <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10 }}>
+                <div><div style={{ fontSize:12,color:"#6b7280",marginBottom:3 }}>ຊື່ (ລາວ + emoji)</div><input value={catForm.label} onChange={e=>setCatForm({...catForm,label:e.target.value})} placeholder="🍦 ໄອສຄຣີມ" style={inpStyle} /></div>
+                <div><div style={{ fontSize:12,color:"#6b7280",marginBottom:3 }}>ຊື່ (EN)</div><input value={catForm.labelEn} onChange={e=>setCatForm({...catForm,labelEn:e.target.value})} placeholder="Ice Cream" style={inpStyle} /></div>
+                {!editCat&&<div><div style={{ fontSize:12,color:"#6b7280",marginBottom:3 }}>ID (auto)</div><input value={catForm.id} onChange={e=>setCatForm({...catForm,id:e.target.value})} placeholder="ice_cream" style={inpStyle} /></div>}
+              </div>
+              <div style={{ display:"flex",gap:8,marginTop:12 }}>
+                <button onClick={saveCat} style={{ padding:"10px 18px",background:"#16a34a",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>ບັນທຶກ</button>
+                <button onClick={()=>{setShowAddCat(false);setEditCat(null);}} style={{ padding:"10px 18px",background:"#f3f4f6",border:"none",borderRadius:8,cursor:"pointer" }}>ຍົກເລີກ</button>
+              </div>
+            </div>
+          )}
+          <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden" }}>
+            {categories.map((c,i)=>(
+              <div key={c.id} style={{ display:"flex",alignItems:"center",gap:12,padding:"12px 16px",borderBottom:i<categories.length-1?"1px solid #f3f4f6":"none" }}>
+                <span style={{ fontSize:22 }}>{c.label.split(" ")[0]}</span>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:14,fontWeight:600 }}>{c.label}{ADDON_CATEGORIES.includes(c.id)&&<span style={{ marginLeft:6,fontSize:10,background:"#ede9fe",color:"#7c3aed",padding:"1px 6px",borderRadius:3 }}>✨ Add-ons</span>}</div>
+                  <div style={{ fontSize:12,color:"#6b7280" }}>{c.labelEn} · <code style={{ fontSize:11 }}>{c.id}</code></div>
+                </div>
+                <span style={{ fontSize:12,color:"#6b7280",background:"#f3f4f6",padding:"2px 8px",borderRadius:4 }}>{menu.filter(m=>m.cat===c.id).length} ເມນູ</span>
+                <button onClick={()=>startEditCat(c)} style={{ padding:"6px 10px",background:"#ede9fe",color:"#7c3aed",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontWeight:600 }}>✏️</button>
+                <button onClick={()=>delCat(c.id)} style={{ padding:"6px 10px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>🗑</button>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {tab==="addons"&&(
+        <>
+          <div style={{ background:"#ede9fe",border:"1px solid #c4b5fd",borderRadius:10,padding:12,marginBottom:14,fontSize:13,color:"#5b21b6" }}>
+            ℹ️ Add-ons ຈະສະແດງເປັນ modal ໃຫ້ລູກຄ້າເລືອກ ເມື່ອກົດເມນູໃນໝວດ <b>ກາເຟ ☕</b> ແລະ <b>ມັດຊາ 🍵</b>
+          </div>
+          <div style={{ display:"flex",justifyContent:"space-between",marginBottom:12 }}>
+            <div style={{ fontSize:13,color:"#6b7280" }}>{addons.length} Add-ons</div>
+            <button onClick={()=>{setEditAddon(null);setAddonForm({name:"",nameLao:"",price:"",group:"milk"});setShowAddAddon(!showAddAddon);}} style={{ padding:"10px 18px",background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມ</button>
+          </div>
+          {showAddAddon&&(
+            <div style={{ background:"#fff",borderRadius:12,padding:18,border:"1px solid #e5e7eb",marginBottom:14 }}>
+              <div style={{ fontWeight:600,marginBottom:12,fontSize:14 }}>{editAddon?"✏️ ແກ້ໄຂ Add-on":"+ Add-on ໃໝ່"}</div>
+              <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))",gap:10 }}>
+                <div><div style={{ fontSize:12,color:"#6b7280",marginBottom:3 }}>ຊື່ (EN)</div><input value={addonForm.name} onChange={e=>setAddonForm({...addonForm,name:e.target.value})} placeholder="Oat Milk" style={inpStyle} /></div>
+                <div><div style={{ fontSize:12,color:"#6b7280",marginBottom:3 }}>ຊື່ (ລາວ)</div><input value={addonForm.nameLao} onChange={e=>setAddonForm({...addonForm,nameLao:e.target.value})} placeholder="ນົມໂອ໋ດ" style={inpStyle} /></div>
+                <div><div style={{ fontSize:12,color:"#6b7280",marginBottom:3 }}>ລາຄາ (₭)</div><input type="number" value={addonForm.price} onChange={e=>setAddonForm({...addonForm,price:e.target.value})} style={inpStyle} /></div>
+                <div><div style={{ fontSize:12,color:"#6b7280",marginBottom:3 }}>ກຸ່ມ</div>
+                  <select value={addonForm.group} onChange={e=>setAddonForm({...addonForm,group:e.target.value})} style={inpStyle}>
+                    {Object.entries(ADDON_GROUPS).map(([k,l])=><option key={k} value={k}>{l}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{ display:"flex",gap:8,marginTop:12 }}>
+                <button onClick={saveAddon} style={{ padding:"10px 18px",background:"#16a34a",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>ບັນທຶກ</button>
+                <button onClick={()=>{setShowAddAddon(false);setEditAddon(null);}} style={{ padding:"10px 18px",background:"#f3f4f6",border:"none",borderRadius:8,cursor:"pointer" }}>ຍົກເລີກ</button>
+              </div>
+            </div>
+          )}
+          {Object.entries(ADDON_GROUPS).map(([groupId,groupLabel])=>{
+            const groupAddons=addons.filter(a=>a.group===groupId);
+            if(groupAddons.length===0)return null;
+            return(
+              <div key={groupId} style={{ marginBottom:14 }}>
+                <div style={{ fontSize:13,fontWeight:700,marginBottom:6,color:"#1a1a2e" }}>{groupLabel}</div>
+                <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden" }}>
+                  {groupAddons.map((a,i)=>(
+                    <div key={a.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderBottom:i<groupAddons.length-1?"1px solid #f3f4f6":"none" }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:13,fontWeight:600 }}>{a.name}</div>
+                        <div style={{ fontSize:11,color:"#6b7280" }}>{a.nameLao}</div>
+                      </div>
+                      <span style={{ fontSize:13,fontWeight:700,color:"#7c3aed" }}>+{formatKip(a.price)}</span>
+                      <button onClick={()=>startEditAddon(a)} style={{ padding:"5px 10px",background:"#ede9fe",color:"#7c3aed",border:"none",borderRadius:6,cursor:"pointer",fontSize:11,fontWeight:600 }}>✏️</button>
+                      <button onClick={()=>delAddon(a.id)} style={{ padding:"5px 10px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>🗑</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          {addons.length===0&&<div style={{ background:"#fff",borderRadius:12,padding:40,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີ Add-ons</div>}
+        </>
+      )}
+
+      {tab==="settings"&&(
+        <div style={{ background:"#fff",borderRadius:12,padding:20,border:"1px solid #e5e7eb" }}>
+          <div style={{ fontSize:15,fontWeight:700,marginBottom:16 }}>🏪 ຂໍ້ມູນຮ້ານ (ໃບບິນ)</div>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:12 }}>
+            {[["ຊື່ຮ້ານ (EN)","name"],["ຊື່ຮ້ານ (ລາວ)","nameLao"],["ທີ່ຢູ່ (EN)","addressEn"],["ທີ່ຢູ່ (ລາວ)","address"],["ເມືອງ","city"],["ເບີໂທ","phone"],["ຂໍ້ຄວາມທ້າຍໃບ","footer"]].map(([l,k])=>(
+              <div key={k}><div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>{l}</div><input value={shopForm[k]||""} onChange={e=>setShopForm({...shopForm,[k]:e.target.value})} style={inpStyle} /></div>
+            ))}
+          </div>
+          <button onClick={saveShop} style={{ marginTop:16,padding:"12px 24px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer" }}>💾 ບັນທຶກ</button>
+        </div>
+      )}
+
+      {tab==="qr"&&(
+        <div style={{ background:"#fff",borderRadius:12,padding:20,border:"1px solid #e5e7eb" }}>
+          <div style={{ fontSize:15,fontWeight:700,marginBottom:14 }}>📲 QR Code</div>
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(200px,1fr))",gap:10,marginBottom:16 }}>
+            {[["ທະນາຄານ","qrBank"],["ຊື່ບັນຊີ","qrAccount"],["ເລກບັນຊີ","qrNumber"]].map(([l,k])=>(
+              <div key={k}><div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>{l}</div><input value={shopForm[k]||""} onChange={e=>setShopForm({...shopForm,[k]:e.target.value})} style={inpStyle} /></div>
+            ))}
+          </div>
+          <button onClick={saveShop} style={{ marginBottom:20,padding:"10px 20px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>💾 ບັນທຶກ</button>
+          <div style={{ borderTop:"1px solid #e5e7eb",paddingTop:16 }}>
+            <div style={{ fontSize:14,fontWeight:600,marginBottom:10 }}>ຮູບ QR</div>
+            {qrImage?(
+              <div style={{ display:"flex",alignItems:"center",gap:16 }}>
+                <img src={qrImage} alt="QR" style={{ width:160,height:160,borderRadius:12,border:"1px solid #e5e7eb",objectFit:"cover" }} />
+                <div>
+                  <div style={{ fontSize:13,color:"#16a34a",fontWeight:600,marginBottom:8 }}>✓ ຕັ້ງຄ່າແລ້ວ</div>
+                  <button onClick={()=>qrRef.current?.click()} style={{ padding:"8px 14px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:600,cursor:"pointer",marginRight:8,fontSize:12 }}>ປ່ຽນ</button>
+                  <button onClick={()=>{setQrImage("");stor.set("qrImage","");}} style={{ padding:"8px 14px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:8,fontWeight:600,cursor:"pointer",fontSize:12 }}>ລຶບ</button>
+                </div>
+              </div>
+            ):(
+              <button onClick={()=>qrRef.current?.click()} style={{ padding:30,background:"#f9f6f0",border:"2px dashed #d1d5db",borderRadius:12,cursor:"pointer",width:"100%",textAlign:"center" }}>
+                <div style={{ fontSize:36,marginBottom:8 }}>📲</div><div style={{ fontSize:14,fontWeight:600 }}>ອັບໂຫຼດ QR</div>
+              </button>
+            )}
+            <input ref={qrRef} type="file" accept="image/*" onChange={e=>handleImg(e,"qr")} style={{ display:"none" }} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// SHIFT VIEW
+// ============================================================
+function ShiftView({ shifts, sales, currentShift, onOpen, onClose }) {
+  const [expanded,setExpanded]=useState(null);
+  const orderNet = (o) => o.items.reduce((s,i)=>s+itemPrice(i)*i.qty,0) - (o.discount||0);
+  return (
+    <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
+      <h1 style={{ margin:"0 0 4px",fontSize:22,fontWeight:700 }}>🌗 ກະ / Shift</h1>
+      <div style={{ fontSize:13,color:"#6b7280",marginBottom:20 }}>ຄວບຄຸມ & ລາຍງານ</div>
+      <div style={{ background:"#fff",borderRadius:12,padding:20,border:"1px solid #e5e7eb",marginBottom:20 }}>
+        {currentShift?(
+          <>
+            <div style={{ display:"flex",alignItems:"center",gap:12,marginBottom:14 }}>
+              <span style={{ fontSize:36 }}>🟢</span>
+              <div><div style={{ fontSize:16,fontWeight:700,color:"#16a34a" }}>ກະກຳລັງເປີດ</div><div style={{ fontSize:13,color:"#6b7280" }}>{fmtDT(currentShift.openedAt)} · {currentShift.cashier}</div></div>
+            </div>
+            <div style={{ background:"#f9f6f0",padding:10,borderRadius:8,marginBottom:14,fontSize:13 }}>💵 ເງິນເລີ່ມ: <b>{formatKip(currentShift.openingCash)}</b></div>
+            <button onClick={onClose} style={{ width:"100%",padding:14,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,fontSize:16,cursor:"pointer" }}>🔒 ປິດກະ</button>
+          </>
+        ):(
+          <div style={{ textAlign:"center",padding:20 }}>
+            <div style={{ fontSize:56,marginBottom:10 }}>🌅</div>
+            <div style={{ fontSize:18,fontWeight:700,marginBottom:4 }}>ກະຍັງບໍ່ໄດ້ເປີດ</div>
+            <button onClick={onOpen} style={{ padding:"14px 32px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,fontSize:16,cursor:"pointer",marginTop:14 }}>🌅 ເປີດກະ</button>
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize:15,fontWeight:700,marginBottom:12 }}>ປະຫວັດກະ</div>
+      {[...shifts].reverse().map(sh=>{
+        const ss=sales.filter(s=>!s.voided&&s.payment!=="foc"&&s.shiftId===sh.id);
+        const cashR=ss.filter(s=>s.payment==="cash").reduce((a,s)=>a+orderNet(s),0);
+        const qrR=ss.filter(s=>s.payment==="qr").reduce((a,s)=>a+orderNet(s),0);
+        const tfR=ss.filter(s=>s.payment==="transfer").reduce((a,s)=>a+orderNet(s),0);
+        const total=cashR+qrR+tfR; const open=!sh.closedAt;
+        return(
+          <div key={sh.id} style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",marginBottom:8,overflow:"hidden" }}>
+            <div onClick={()=>setExpanded(expanded===sh.id?null:sh.id)} style={{ padding:"12px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
+              <span style={{ fontSize:22 }}>{open?"🟢":"🔒"}</span>
+              <div style={{ flex:1 }}>
+                <div style={{ fontSize:14,fontWeight:700 }}>{fmtDate(sh.openedAt)} · {sh.cashier}{open&&<span style={{ marginLeft:8,fontSize:10,background:"#dcfce7",color:"#16a34a",padding:"2px 6px",borderRadius:3 }}>ເປີດ</span>}</div>
+                <div style={{ fontSize:12,color:"#6b7280" }}>{fmtTime(sh.openedAt)}{sh.closedAt&&` → ${fmtTime(sh.closedAt)}`} · {ss.length} ໃບ</div>
+              </div>
+              <div style={{ textAlign:"right" }}><div style={{ fontSize:15,fontWeight:700,color:"#7c3aed" }}>{formatKip(total)}</div>{sh.variance!=null&&sh.variance!==0&&<div style={{ fontSize:11,color:sh.variance>0?"#16a34a":"#dc2626" }}>{sh.variance>0?"+":""}{formatKip(sh.variance)}</div>}</div>
+              <span style={{ color:"#9ca3af" }}>{expanded===sh.id?"▲":"▼"}</span>
+            </div>
+            {expanded===sh.id&&(
+              <div style={{ padding:"14px 16px",borderTop:"1px solid #f3f4f6",background:"#f9f6f0" }}>
+                <div style={{ display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:10 }}>
+                  {[["💵 ສົດ",cashR,"#16a34a"],["📲 QR",qrR,"#7c3aed"],["🏦 ໂອນ",tfR,"#2563eb"],["🧾",ss.length,"#374151"]].map(([l,v,c])=>(
+                    <div key={l} style={{ background:"#fff",padding:8,borderRadius:7,textAlign:"center" }}>
+                      <div style={{ fontSize:11,color:"#6b7280" }}>{l}</div>
+                      <div style={{ fontWeight:700,color:c,fontSize:12 }}>{typeof v==="number"&&l!=="🧾"?formatKip(v):v}</div>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ background:"#fff",padding:10,borderRadius:7,fontSize:12 }}>
+                  <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ເງິນເລີ່ມ</span><span>{formatKip(sh.openingCash)}</span></div>
+                  {sh.closedAt&&<>
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ຄາດວ່າ</span><span>{formatKip(sh.expectedCash||0)}</span></div>
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ນັບໄດ້</span><span style={{ fontWeight:700 }}>{formatKip(sh.closingCash)}</span></div>
+                    <div style={{ display:"flex",justifyContent:"space-between",borderTop:"1px dashed #e5e7eb",paddingTop:4,fontWeight:700 }}><span>ສ່ວນຕ່າງ</span><span style={{ color:sh.variance>=0?"#16a34a":"#dc2626" }}>{sh.variance>=0?"+":""}{formatKip(sh.variance)}</span></div>
+                  </>}
+                  {sh.notes&&<div style={{ marginTop:6,fontSize:11,color:"#6b7280",fontStyle:"italic" }}>📝 {sh.notes}</div>}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================
+// MAIN APP
+// ============================================================
+const NAV=[
+  {id:"pos",label:"POS",icon:"🏪",roles:["cashier","manager","owner"]},
+  {id:"shift",label:"ກະ",icon:"🌗",roles:["cashier","manager","owner"]},
+  {id:"dashboard",label:"Dashboard",icon:"📊",roles:["manager","owner"]},
+  {id:"history",label:"ປະຫວັດ",icon:"🧾",roles:["manager","owner"]},
+  {id:"accounting",label:"ບັນຊີ",icon:"📒",roles:["owner"]},
+  {id:"admin",label:"ຈັດການ",icon:"⚙️",roles:["manager","owner"]},
+];
+const ROLES={ cashier:{label:"ພະນັກງານ",en:"Cashier",pin:"1234"}, manager:{label:"ຜູ້ຈັດການ",en:"Manager",pin:"5678"}, owner:{label:"ເຈົ້າຂອງ",en:"Owner",pin:"9999"} };
+
+export default function App() {
+  const [role,setRole]=useState(null);
+  const [pin,setPin]=useState("");
+  const [pinErr,setPinErr]=useState("");
+  const [view,setView]=useState("pos");
+  const [menu,setMenu]=useState(()=>stor.get("menu",INITIAL_MENU));
+  const [categories,setCategories]=useState(()=>stor.get("categories",INITIAL_CATEGORIES));
+  const [addons,setAddons]=useState(()=>stor.get("addons",DEFAULT_ADDONS));
+  const [sales,setSales]=useState(()=>stor.get("sales",[]));
+  const [shifts,setShifts]=useState(()=>stor.get("shifts",[]));
+  const [qrImage,setQrImage]=useState(()=>stor.get("qrImage",""));
+  const [shopInfo,setShopInfo]=useState(()=>stor.get("shopInfo",DEFAULT_SHOP_INFO));
+  const [parkedOrders,setParkedOrders]=useState(()=>stor.get("parked",[]));
+  const [shiftModal,setShiftModal]=useState(null);
+
+  const currentShift=shifts.find(s=>!s.closedAt);
+
+  // Auto-save parked
+  useEffect(() => { stor.set("parked", parkedOrders); }, [parkedOrders]);
+
+  const handlePin=(r)=>{ if(pin===ROLES[r].pin){setRole(r);setPin("");setPinErr("");}else setPinErr("PIN ບໍ່ຖືກຕ້ອງ"); };
+  const addSale=(o)=>{ const u=[...sales,o];setSales(u);stor.set("sales",u);syncOrder(o); };
+  const openShift=({cash,notes})=>{ const s={id:genId(),openedAt:new Date().toISOString(),openingCash:cash,cashier:ROLES[role].label,notes};const u=[...shifts,s];setShifts(u);stor.set("shifts",u);syncShift(s);setShiftModal(null); };
+  const closeShift=({cash,notes,expected})=>{ const u=shifts.map(s=>s.id===currentShift.id?{...s,closedAt:new Date().toISOString(),closingCash:cash,expectedCash:expected,variance:cash-expected,notes:(s.notes?s.notes+" | ":"")+(notes||"")}:s);setShifts(u);stor.set("shifts",u);syncShift(u.find(s=>s.id===currentShift.id));setShiftModal(null); };
+
+  const allowed=NAV.filter(n=>n.roles.includes(role||"cashier"));
+
+  if(!role) return (
+    <div style={{ width:"100%",minHeight:"100vh",background:"#1a1a2e",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"'Noto Sans Lao',sans-serif" }}>
+      <div style={{ textAlign:"center",marginBottom:36 }}>
+        <div style={{ fontSize:60,marginBottom:10 }}>🥐</div>
+        <div style={{ fontSize:30,fontWeight:700,color:"#f4d03f",letterSpacing:2 }}>PAN PAN BAKE</div>
+        <div style={{ fontSize:15,color:"#fde68a",marginTop:4 }}>ຮ້ານ ແປນ ແປນ ເບກ</div>
+      </div>
+      <div style={{ background:"rgba(255,255,255,0.07)",borderRadius:16,padding:"28px 36px",width:320 }}>
+        <div style={{ fontSize:15,color:"#e5e7eb",fontWeight:600,textAlign:"center",marginBottom:16 }}>ເຂົ້າສູ່ລະບົບ / Login</div>
+        <input type="password" placeholder="ໃສ່ PIN" value={pin} onChange={e=>{setPin(e.target.value);setPinErr("");}}
+          style={{ width:"100%",padding:"12px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.2)",background:"rgba(255,255,255,0.1)",color:"#fff",fontSize:20,textAlign:"center",letterSpacing:8,outline:"none",marginBottom:12,boxSizing:"border-box" }} />
+        {pinErr&&<div style={{ color:"#f87171",fontSize:13,textAlign:"center",marginBottom:10 }}>{pinErr}</div>}
+        <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
+          {Object.entries(ROLES).map(([r,info])=>(
+            <button key={r} onClick={()=>handlePin(r)} style={{ padding:12,background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,display:"flex",justifyContent:"space-between" }}>
+              <span>{info.label}</span><span style={{ opacity:0.7 }}>{info.en}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ fontSize:11,color:"#4b5563",textAlign:"center",marginTop:14 }}>Demo: 1234 · 5678 · 9999</div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ display:"flex",width:"100%",height:"100vh",fontFamily:"'Noto Sans Lao','Segoe UI',sans-serif",overflow:"hidden" }}>
+      <div style={{ width:70,minWidth:70,background:"#1a1a2e",display:"flex",flexDirection:"column",alignItems:"center",padding:"14px 0",gap:3,flexShrink:0 }}>
+        <div style={{ fontSize:26,marginBottom:14 }}>🥐</div>
+        {allowed.map(n=>(
+          <button key={n.id} onClick={()=>setView(n.id)} style={{ width:54,height:54,borderRadius:13,border:"none",cursor:"pointer",background:view===n.id?"#f4d03f":"transparent",color:view===n.id?"#1a1a2e":"#6b7280",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,position:"relative" }}>
+            <span style={{ fontSize:20 }}>{n.icon}</span>
+            <span style={{ fontSize:9,fontWeight:600 }}>{n.label}</span>
+            {n.id==="shift"&&currentShift&&<span style={{ position:"absolute",top:4,right:6,width:7,height:7,borderRadius:"50%",background:"#16a34a" }} />}
+            {n.id==="pos"&&parkedOrders.length>0&&<span style={{ position:"absolute",top:4,right:6,minWidth:16,height:16,borderRadius:8,background:"#ea580c",color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px" }}>{parkedOrders.length}</span>}
+          </button>
+        ))}
+        <div style={{ flex:1 }} />
+        <div style={{ textAlign:"center",marginBottom:6 }}>
+          <div style={{ fontSize:9,color:"#4b5563",marginBottom:4 }}>{ROLES[role].label}</div>
+          <button onClick={()=>{setRole(null);setView("pos");}} style={{ width:38,height:38,borderRadius:9,border:"none",background:"rgba(255,255,255,0.1)",color:"#6b7280",cursor:"pointer",fontSize:15 }}>🔓</button>
+        </div>
+      </div>
+      <div className="view-content" style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden" }}>
+        {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} />}
+        {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
+        {view==="dashboard"&&<DashboardView sales={sales} />}
+        {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
+        {view==="accounting"&&<AccountingView sales={sales} />}
+        {view==="admin"&&<AdminView menu={menu} setMenu={setMenu} categories={categories} setCategories={setCategories} addons={addons} setAddons={setAddons} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfo} />}
+      </div>
+      {shiftModal&&<ShiftModal type={shiftModal} currentShift={currentShift} sales={sales} onSubmit={shiftModal==="open"?openShift:closeShift} onCancel={()=>setShiftModal(null)} />}
+    </div>
+  );
+}
