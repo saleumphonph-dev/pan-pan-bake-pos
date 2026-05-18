@@ -1897,7 +1897,7 @@ export default function App() {
       <div className="nav-rail" style={{ width:70,minWidth:70,background:"#1a1a2e",display:"flex",flexDirection:"column",alignItems:"center",padding:"14px 0",gap:3,flexShrink:0 }}>
         <div className="nav-logo" style={{ fontSize:26,marginBottom:14 }}>🥐</div>
         {allowed.map(n=>(
-          <button key={n.id} onClick={()=>setView(n.id)} className="nav-btn" style={{ width:54,height:54,borderRadius:13,border:"none",cursor:"pointer",background:view===n.id?"#f4d03f":"transparent",color:view===n.id?"#1a1a2e":"#6b7280",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,position:"relative" }}>
+          <button key={n.id} onClick={()=>setView(n.id)} className="nav-btn" style={{ width:54,height:54,minWidth:54,borderRadius:13,border:"none",cursor:"pointer",background:view===n.id?"#f4d03f":"transparent",color:view===n.id?"#1a1a2e":"#6b7280",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,position:"relative",padding:0,boxSizing:"border-box",flexShrink:0 }}>
             <span style={{ fontSize:20 }}>{n.icon}</span>
             <span style={{ fontSize:9,fontWeight:600 }}>{n.label}</span>
             {n.id==="shift"&&currentShift&&<span style={{ position:"absolute",top:4,right:6,width:7,height:7,borderRadius:"50%",background:"#16a34a" }} />}
@@ -1913,7 +1913,7 @@ export default function App() {
         </div>
         <div className="nav-logout-wrap" style={{ textAlign:"center",marginBottom:6 }}>
           <div className="nav-role-label" style={{ fontSize:9,color:"#4b5563",marginBottom:4 }}>{ROLES[role].label}</div>
-          <button onClick={()=>{setRole(null);setView("pos");}} style={{ width:38,height:38,borderRadius:9,border:"none",background:"rgba(255,255,255,0.1)",color:"#6b7280",cursor:"pointer",fontSize:15 }}>🔓</button>
+          <button onClick={()=>{setRole(null);setView("pos");}} style={{ width:38,height:38,minWidth:38,borderRadius:9,border:"none",background:"rgba(255,255,255,0.1)",color:"#6b7280",cursor:"pointer",fontSize:15,padding:0,boxSizing:"border-box" }}>🔓</button>
         </div>
       </div>
       <div className="view-content" style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden",paddingTop: mode==="phone" ? 42 : 0 }}>
