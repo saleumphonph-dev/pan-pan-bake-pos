@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, checkConnection, wipeAllCloudData } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fetchShifts } from "./src/lib/supabase.js";
 
 // ============================================================
 // CONSTANTS
@@ -483,8 +483,8 @@ function ParkModal({ onConfirm, onCancel }) {
 // ============================================================
 // POS VIEW with parked orders & add-ons
 // ============================================================
-function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrImage, shopInfo, parkedOrders, setParkedOrders }) {
-  const { isMobile } = useWindowSize();
+function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrImage, shopInfo, parkedOrders, setParkedOrders, mode }) {
+  const isMobile = mode === "phone";
   const [cat, setCat] = useState(categories[0]?.id || "bakery");
   const [cart, setCart] = useState([]);
   const [search, setSearch] = useState("");
@@ -671,7 +671,7 @@ function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrIm
 
       {/* cart - hidden on mobile, shown as sidebar on desktop/tablet */}
       {!isMobile && (
-      <div style={{ width:340,background:"#fff",display:"flex",flexDirection:"column",borderLeft:"1px solid #e5e7eb" }}>
+      <div className="cart-sidebar" style={{ width:340,background:"#fff",display:"flex",flexDirection:"column",borderLeft:"1px solid #e5e7eb" }}>
         <div style={{ padding:"14px 20px",background:"#1a1a2e",color:"#f4d03f" }}>
           <div style={{ fontSize:16,fontWeight:700 }}>🛒 ລາຍການ</div>
           <div style={{ fontSize:12,color:"#9ca3af",marginTop:2 }}>{cart.reduce((s,c)=>s+c.qty,0)} ລາຍການ {parkedName && `· ${parkedName}`}</div>
@@ -1776,11 +1776,51 @@ export default function App() {
   const [shopInfo,setShopInfo]=useState(()=>stor.get("shopInfo",DEFAULT_SHOP_INFO));
   const [parkedOrders,setParkedOrders]=useState(()=>stor.get("parked",[]));
   const [shiftModal,setShiftModal]=useState(null);
+  const [layoutMode,setLayoutMode]=useState(()=>stor.get("layoutMode","auto"));
+  const vp = useWindowSize();
+  const autoMode = vp.isMobile ? "phone" : vp.isTablet ? "tablet" : "desktop";
+  const mode = layoutMode === "auto" ? autoMode : layoutMode;
+  const switchMode = (m) => { setLayoutMode(m); stor.set("layoutMode", m); };
 
   const currentShift=shifts.find(s=>!s.closedAt);
 
   // Auto-save parked
   useEffect(() => { stor.set("parked", parkedOrders); }, [parkedOrders]);
+
+  // Real-time cloud sync — polls Supabase every 10s, merges cloud data into local state.
+  // Strategy: union by id; cloud wins for conflicting ids; local-only rows are preserved
+  // (e.g. an offline sale that hasn't synced up yet).
+  useEffect(() => {
+    if (!role) return; // only when logged in
+    let cancelled = false;
+    const sync = async () => {
+      const [cs, cf] = await Promise.all([fetchSales(), fetchShifts()]);
+      if (cancelled) return;
+      if (cs) {
+        setSales(prev => {
+          const m = new Map();
+          prev.forEach(o => m.set(o.id, o));
+          cs.forEach(o => m.set(o.id, o));
+          const next = Array.from(m.values());
+          stor.set("sales", next);
+          return next;
+        });
+      }
+      if (cf) {
+        setShifts(prev => {
+          const m = new Map();
+          prev.forEach(s => m.set(s.id, s));
+          cf.forEach(s => m.set(s.id, s));
+          const next = Array.from(m.values());
+          stor.set("shifts", next);
+          return next;
+        });
+      }
+    };
+    sync(); // immediate on login
+    const id = setInterval(sync, 10000); // every 10s
+    return () => { cancelled = true; clearInterval(id); };
+  }, [role]);
 
   const handlePin=(r)=>{ if(pin===ROLES[r].pin){setRole(r);setPin("");setPinErr("");}else setPinErr("PIN ບໍ່ຖືກຕ້ອງ"); };
   const addSale=(o)=>{ const u=[...sales,o];setSales(u);stor.set("sales",u);syncOrder(o); };
@@ -1824,12 +1864,40 @@ export default function App() {
     </div>
   );
 
+  const ModeBtn = ({ m, icon, label }) => {
+    const active = layoutMode === m || (layoutMode === "auto" && autoMode === m);
+    return (
+      <button onClick={()=>switchMode(m)} title={label}
+        style={{
+          width:30,height:30,borderRadius:7,border:"none",cursor:"pointer",
+          background: active ? "#f4d03f" : "rgba(255,255,255,0.08)",
+          color: active ? "#1a1a2e" : "#9ca3af",
+          fontSize:13,padding:0
+        }}>{icon}</button>
+    );
+  };
+
   return (
-    <div style={{ display:"flex",width:"100%",height:"100vh",fontFamily:"'Noto Sans Lao','Segoe UI',sans-serif",overflow:"hidden" }}>
-      <div style={{ width:70,minWidth:70,background:"#1a1a2e",display:"flex",flexDirection:"column",alignItems:"center",padding:"14px 0",gap:3,flexShrink:0 }}>
-        <div style={{ fontSize:26,marginBottom:14 }}>🥐</div>
+    <div className={`layout-${mode}`} style={{ display:"flex",width:"100%",height:"100vh",fontFamily:"'Noto Sans Lao','Segoe UI',sans-serif",overflow:"hidden" }}>
+      {/* Top header — only visible in phone mode via CSS */}
+      <div className="top-header" style={{ display:"none",position:"fixed",top:0,left:0,right:0,height:42,background:"#1a1a2e",alignItems:"center",justifyContent:"space-between",padding:"0 12px",zIndex:99,borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
+        <div style={{ display:"flex",alignItems:"center",gap:8 }}>
+          <span style={{ fontSize:18 }}>🥐</span>
+          <span style={{ fontSize:11,color:"#9ca3af" }}>{ROLES[role].label}</span>
+        </div>
+        <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+          <ModeBtn m="phone" icon="📱" label="Phone" />
+          <ModeBtn m="tablet" icon="📲" label="Tablet" />
+          <ModeBtn m="desktop" icon="💻" label="Desktop" />
+          <button onClick={()=>{setRole(null);setView("pos");}} style={{ width:30,height:30,borderRadius:7,border:"none",background:"rgba(255,255,255,0.1)",color:"#9ca3af",cursor:"pointer",fontSize:13,padding:0 }}>🔓</button>
+        </div>
+      </div>
+
+      {/* Nav rail / bottom tab bar */}
+      <div className="nav-rail" style={{ width:70,minWidth:70,background:"#1a1a2e",display:"flex",flexDirection:"column",alignItems:"center",padding:"14px 0",gap:3,flexShrink:0 }}>
+        <div className="nav-logo" style={{ fontSize:26,marginBottom:14 }}>🥐</div>
         {allowed.map(n=>(
-          <button key={n.id} onClick={()=>setView(n.id)} style={{ width:54,height:54,borderRadius:13,border:"none",cursor:"pointer",background:view===n.id?"#f4d03f":"transparent",color:view===n.id?"#1a1a2e":"#6b7280",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,position:"relative" }}>
+          <button key={n.id} onClick={()=>setView(n.id)} className="nav-btn" style={{ width:54,height:54,borderRadius:13,border:"none",cursor:"pointer",background:view===n.id?"#f4d03f":"transparent",color:view===n.id?"#1a1a2e":"#6b7280",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,position:"relative" }}>
             <span style={{ fontSize:20 }}>{n.icon}</span>
             <span style={{ fontSize:9,fontWeight:600 }}>{n.label}</span>
             {n.id==="shift"&&currentShift&&<span style={{ position:"absolute",top:4,right:6,width:7,height:7,borderRadius:"50%",background:"#16a34a" }} />}
@@ -1837,13 +1905,19 @@ export default function App() {
           </button>
         ))}
         <div style={{ flex:1 }} />
-        <div style={{ textAlign:"center",marginBottom:6 }}>
-          <div style={{ fontSize:9,color:"#4b5563",marginBottom:4 }}>{ROLES[role].label}</div>
+        {/* Device-mode selector (desktop/tablet — phone uses top header) */}
+        <div className="nav-mode-toggle" style={{ display:"flex",flexDirection:"column",gap:4,marginBottom:8 }}>
+          <ModeBtn m="phone" icon="📱" label="Phone" />
+          <ModeBtn m="tablet" icon="📲" label="Tablet" />
+          <ModeBtn m="desktop" icon="💻" label="Desktop" />
+        </div>
+        <div className="nav-logout-wrap" style={{ textAlign:"center",marginBottom:6 }}>
+          <div className="nav-role-label" style={{ fontSize:9,color:"#4b5563",marginBottom:4 }}>{ROLES[role].label}</div>
           <button onClick={()=>{setRole(null);setView("pos");}} style={{ width:38,height:38,borderRadius:9,border:"none",background:"rgba(255,255,255,0.1)",color:"#6b7280",cursor:"pointer",fontSize:15 }}>🔓</button>
         </div>
       </div>
-      <div className="view-content" style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden" }}>
-        {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} />}
+      <div className="view-content" style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden",paddingTop: mode==="phone" ? 42 : 0 }}>
+        {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
         {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
         {view==="dashboard"&&<DashboardView sales={sales} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}

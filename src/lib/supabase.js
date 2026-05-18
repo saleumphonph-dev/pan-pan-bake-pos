@@ -50,6 +50,56 @@ export async function syncShift(shift) {
   }
 }
 
+/** Fetch all sales from cloud — returns array shaped like local order objects, or null on error */
+export async function fetchSales() {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from("sales")
+      .select("*")
+      .order("date", { ascending: true });
+    if (error) return null;
+    return data.map(r => ({
+      id:         r.id,
+      date:       r.date,
+      items:      r.items,
+      total:      r.total,
+      discount:   r.discount ?? 0,
+      payment:    r.payment,
+      received:   r.received,
+      note:       r.note,
+      cashier:    r.cashier,
+      shiftId:    r.shift_id,
+      voided:     r.voided ?? false,
+      voidReason: r.void_reason,
+      parkedName: r.parked_name,
+    }));
+  } catch { return null; }
+}
+
+/** Fetch all shifts from cloud — returns array shaped like local shift objects, or null on error */
+export async function fetchShifts() {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from("shifts")
+      .select("*")
+      .order("opened_at", { ascending: true });
+    if (error) return null;
+    return data.map(r => ({
+      id:            r.id,
+      openedAt:      r.opened_at,
+      closedAt:      r.closed_at,
+      cashier:       r.cashier,
+      openingCash:   r.opening_cash ?? 0,
+      closingCash:   r.closing_cash,
+      expectedCash:  r.expected_cash,
+      variance:      r.variance,
+      notes:         r.notes,
+    }));
+  } catch { return null; }
+}
+
 /** Check if Supabase is configured and reachable */
 export async function checkConnection() {
   if (!supabase) return "no-db";
