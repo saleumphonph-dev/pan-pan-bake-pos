@@ -1747,7 +1747,7 @@ const NAV=[
   {id:"accounting",label:"ບັນຊີ",icon:"📒",roles:["owner"]},
   {id:"admin",label:"ຈັດການ",icon:"⚙️",roles:["manager","owner"]},
 ];
-const ROLES={ cashier:{label:"ພະນັກງານ",en:"Cashier",pin:"1234"}, manager:{label:"ຜູ້ຈັດການ",en:"Manager",pin:"5678"}, owner:{label:"ເຈົ້າຂອງ",en:"Owner",pin:"9999"} };
+const ROLES={ cashier:{label:"ພະນັກງານ",en:"Cashier",pin:"1234"}, manager:{label:"ຜູ້ຈັດການ",en:"Manager",pin:"5555"}, owner:{label:"ເຈົ້າຂອງ",en:"Owner",pin:"556559"} };
 
 export default function App() {
   const [role,setRole]=useState(null);
@@ -1795,7 +1795,6 @@ export default function App() {
             </button>
           ))}
         </div>
-        <div style={{ fontSize:11,color:"#4b5563",textAlign:"center",marginTop:14 }}>Demo: 1234 · 5678 · 9999</div>
       </div>
     </div>
   );
