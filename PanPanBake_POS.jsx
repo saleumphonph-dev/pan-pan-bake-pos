@@ -691,9 +691,9 @@ function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrIm
                       <div style={{ fontSize:11,color:"#7c3aed",fontWeight:600 }}>{formatKip(lp)}</div>
                     </div>
                     <div style={{ display:"flex",alignItems:"center",gap:5 }}>
-                      <button onClick={()=>updateQty(key,-1)} style={{ width:24,height:24,borderRadius:"50%",border:"1px solid #e5e7eb",background:"#f9fafb",cursor:"pointer",fontWeight:700 }}>-</button>
+                      <button onClick={()=>updateQty(key,-1)} style={{ width:30,height:30,minWidth:30,borderRadius:"50%",border:"1px solid #e5e7eb",background:"#f9fafb",cursor:"pointer",fontWeight:700,padding:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,lineHeight:1 }}>−</button>
                       <span style={{ fontSize:13,fontWeight:700,minWidth:18,textAlign:"center" }}>{item.qty}</span>
-                      <button onClick={()=>updateQty(key,1)} style={{ width:24,height:24,borderRadius:"50%",border:"none",background:"#1a1a2e",color:"#f4d03f",cursor:"pointer",fontWeight:700 }}>+</button>
+                      <button onClick={()=>updateQty(key,1)} style={{ width:30,height:30,minWidth:30,borderRadius:"50%",border:"none",background:"#1a1a2e",color:"#f4d03f",cursor:"pointer",fontWeight:700,padding:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,lineHeight:1 }}>+</button>
                     </div>
                     <div style={{ fontSize:13,fontWeight:700,minWidth:65,textAlign:"right" }}>{formatKip(lp*item.qty)}</div>
                   </div>
@@ -795,9 +795,9 @@ function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrIm
                           <div style={{ fontSize:11,color:"#7c3aed",fontWeight:600 }}>{formatKip(lp)}</div>
                         </div>
                         <div style={{ display:"flex",alignItems:"center",gap:5 }}>
-                          <button onClick={()=>updateQty(key,-1)} style={{ width:24,height:24,borderRadius:"50%",border:"1px solid #e5e7eb",background:"#f9fafb",cursor:"pointer",fontWeight:700 }}>-</button>
+                          <button onClick={()=>updateQty(key,-1)} style={{ width:30,height:30,minWidth:30,borderRadius:"50%",border:"1px solid #e5e7eb",background:"#f9fafb",cursor:"pointer",fontWeight:700,padding:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,lineHeight:1 }}>−</button>
                           <span style={{ fontSize:13,fontWeight:700,minWidth:18,textAlign:"center" }}>{item.qty}</span>
-                          <button onClick={()=>updateQty(key,1)} style={{ width:24,height:24,borderRadius:"50%",border:"none",background:"#1a1a2e",color:"#f4d03f",cursor:"pointer",fontWeight:700 }}>+</button>
+                          <button onClick={()=>updateQty(key,1)} style={{ width:30,height:30,minWidth:30,borderRadius:"50%",border:"none",background:"#1a1a2e",color:"#f4d03f",cursor:"pointer",fontWeight:700,padding:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,lineHeight:1 }}>+</button>
                         </div>
                         <div style={{ fontSize:13,fontWeight:700,minWidth:65,textAlign:"right" }}>{formatKip(lp*item.qty)}</div>
                       </div>
