@@ -1864,59 +1864,65 @@ export default function App() {
     </div>
   );
 
-  const ModeBtn = ({ m, icon, label }) => {
+  const ModeBtn = ({ m, icon, label, small }) => {
     const active = layoutMode === m || (layoutMode === "auto" && autoMode === m);
+    const sz = small ? 26 : 30;
     return (
-      <button onClick={()=>switchMode(m)} title={label}
-        style={{
-          width:30,height:30,borderRadius:7,border:"none",cursor:"pointer",
-          background: active ? "#f4d03f" : "rgba(255,255,255,0.08)",
-          color: active ? "#1a1a2e" : "#9ca3af",
-          fontSize:13,padding:0
-        }}>{icon}</button>
+      <button onClick={()=>switchMode(m)} title={label} style={{
+        width:sz,height:sz,minWidth:sz,borderRadius:6,border:"none",cursor:"pointer",
+        background: active ? "#f4d03f" : "rgba(255,255,255,0.1)",
+        color: active ? "#1a1a2e" : "#9ca3af",
+        fontSize: small ? 11 : 13, padding:0, boxSizing:"border-box",
+        display:"flex",alignItems:"center",justifyContent:"center"
+      }}>{icon}</button>
     );
   };
 
-  return (
-    <div className={`layout-${mode}`} style={{ display:"flex",width:"100%",height:"100vh",fontFamily:"'Noto Sans Lao','Segoe UI',sans-serif",overflow:"hidden" }}>
-      {/* Top header — only visible in phone mode via CSS */}
-      <div className="top-header" style={{ display:"none",position:"fixed",top:0,left:0,right:0,height:42,background:"#1a1a2e",alignItems:"center",justifyContent:"space-between",padding:"0 12px",zIndex:99,borderBottom:"1px solid rgba(255,255,255,0.06)" }}>
+  const ViewContent = () => (
+    <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden" }}>
+      {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
+      {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
+      {view==="dashboard"&&<DashboardView sales={sales} />}
+      {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
+      {view==="accounting"&&<AccountingView sales={sales} />}
+      {view==="admin"&&<AdminView menu={menu} setMenu={setMenu} categories={categories} setCategories={setCategories} addons={addons} setAddons={setAddons} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfo} role={role} onResetTestData={resetTestData} />}
+    </div>
+  );
+
+  const NavBtn = ({ n }) => (
+    <button onClick={()=>setView(n.id)} style={{
+      width:54,height:54,minWidth:54,maxWidth:54,
+      borderRadius:13,border:"none",cursor:"pointer",
+      background:view===n.id?"#f4d03f":"transparent",
+      color:view===n.id?"#1a1a2e":"#6b7280",
+      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+      gap:2,position:"relative",padding:0,boxSizing:"border-box",flexShrink:0,overflow:"hidden"
+    }}>
+      <span style={{ fontSize:20,lineHeight:1 }}>{n.icon}</span>
+      <span style={{ fontSize:9,fontWeight:600,lineHeight:1 }}>{n.label}</span>
+      {n.id==="shift"&&currentShift&&<span style={{ position:"absolute",top:4,right:6,width:7,height:7,borderRadius:"50%",background:"#16a34a" }} />}
+      {n.id==="pos"&&parkedOrders.length>0&&<span style={{ position:"absolute",top:4,right:6,minWidth:16,height:16,borderRadius:8,background:"#ea580c",color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px" }}>{parkedOrders.length}</span>}
+    </button>
+  );
+
+  /* ── PHONE layout: top header + content + bottom tab bar ── */
+  if (mode === "phone") return (
+    <div style={{ display:"flex",flexDirection:"column",width:"100%",height:"100vh",fontFamily:"'Noto Sans Lao','Segoe UI',sans-serif",overflow:"hidden" }}>
+      {/* Fixed top header */}
+      <div style={{ position:"fixed",top:0,left:0,right:0,height:44,background:"#1a1a2e",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 12px",zIndex:200,borderBottom:"1px solid rgba(255,255,255,0.06)",flexShrink:0 }}>
         <div style={{ display:"flex",alignItems:"center",gap:8 }}>
           <span style={{ fontSize:18 }}>🥐</span>
           <span style={{ fontSize:11,color:"#9ca3af" }}>{ROLES[role].label}</span>
         </div>
-        <div style={{ display:"flex",alignItems:"center",gap:6 }}>
-          <ModeBtn m="phone" icon="📱" label="Phone" />
-          <ModeBtn m="tablet" icon="📲" label="Tablet" />
-          <ModeBtn m="desktop" icon="💻" label="Desktop" />
-          <button onClick={()=>{setRole(null);setView("pos");}} style={{ width:30,height:30,borderRadius:7,border:"none",background:"rgba(255,255,255,0.1)",color:"#9ca3af",cursor:"pointer",fontSize:13,padding:0 }}>🔓</button>
+        <div style={{ display:"flex",alignItems:"center",gap:5 }}>
+          <ModeBtn m="phone" icon="📱" label="Phone" small />
+          <ModeBtn m="tablet" icon="📲" label="Tablet" small />
+          <ModeBtn m="desktop" icon="💻" label="Desktop" small />
+          <button onClick={()=>{setRole(null);setView("pos");}} style={{ width:26,height:26,minWidth:26,borderRadius:6,border:"none",background:"rgba(255,255,255,0.1)",color:"#9ca3af",cursor:"pointer",fontSize:13,padding:0,boxSizing:"border-box",display:"flex",alignItems:"center",justifyContent:"center" }}>🔓</button>
         </div>
       </div>
-
-      {/* Nav rail / bottom tab bar */}
-      <div className="nav-rail" style={{ width:70,minWidth:70,background:"#1a1a2e",display:"flex",flexDirection:"column",alignItems:"center",padding:"14px 0",gap:3,flexShrink:0 }}>
-        <div className="nav-logo" style={{ fontSize:26,marginBottom:14 }}>🥐</div>
-        {allowed.map(n=>(
-          <button key={n.id} onClick={()=>setView(n.id)} className="nav-btn" style={{ width:54,height:54,minWidth:54,borderRadius:13,border:"none",cursor:"pointer",background:view===n.id?"#f4d03f":"transparent",color:view===n.id?"#1a1a2e":"#6b7280",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,position:"relative",padding:0,boxSizing:"border-box",flexShrink:0 }}>
-            <span style={{ fontSize:20 }}>{n.icon}</span>
-            <span style={{ fontSize:9,fontWeight:600 }}>{n.label}</span>
-            {n.id==="shift"&&currentShift&&<span style={{ position:"absolute",top:4,right:6,width:7,height:7,borderRadius:"50%",background:"#16a34a" }} />}
-            {n.id==="pos"&&parkedOrders.length>0&&<span style={{ position:"absolute",top:4,right:6,minWidth:16,height:16,borderRadius:8,background:"#ea580c",color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 4px" }}>{parkedOrders.length}</span>}
-          </button>
-        ))}
-        <div style={{ flex:1 }} />
-        {/* Device-mode selector (desktop/tablet — phone uses top header) */}
-        <div className="nav-mode-toggle" style={{ display:"flex",flexDirection:"column",gap:4,marginBottom:8 }}>
-          <ModeBtn m="phone" icon="📱" label="Phone" />
-          <ModeBtn m="tablet" icon="📲" label="Tablet" />
-          <ModeBtn m="desktop" icon="💻" label="Desktop" />
-        </div>
-        <div className="nav-logout-wrap" style={{ textAlign:"center",marginBottom:6 }}>
-          <div className="nav-role-label" style={{ fontSize:9,color:"#4b5563",marginBottom:4 }}>{ROLES[role].label}</div>
-          <button onClick={()=>{setRole(null);setView("pos");}} style={{ width:38,height:38,minWidth:38,borderRadius:9,border:"none",background:"rgba(255,255,255,0.1)",color:"#6b7280",cursor:"pointer",fontSize:15,padding:0,boxSizing:"border-box" }}>🔓</button>
-        </div>
-      </div>
-      <div className="view-content" style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden",paddingTop: mode==="phone" ? 42 : 0 }}>
+      {/* Scrollable content — padded for header+footer */}
+      <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden",paddingTop:44,paddingBottom:64 }}>
         {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
         {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
         {view==="dashboard"&&<DashboardView sales={sales} />}
@@ -1924,6 +1930,46 @@ export default function App() {
         {view==="accounting"&&<AccountingView sales={sales} />}
         {view==="admin"&&<AdminView menu={menu} setMenu={setMenu} categories={categories} setCategories={setCategories} addons={addons} setAddons={setAddons} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfo} role={role} onResetTestData={resetTestData} />}
       </div>
+      {/* Fixed bottom tab bar */}
+      <div style={{ position:"fixed",bottom:0,left:0,right:0,height:64,background:"#1a1a2e",display:"flex",alignItems:"center",zIndex:200,borderTop:"1px solid rgba(255,255,255,0.08)" }}>
+        {allowed.map(n=>(
+          <button key={n.id} onClick={()=>setView(n.id)} style={{
+            flex:1,height:64,border:"none",cursor:"pointer",
+            background:view===n.id?"rgba(244,208,63,0.15)":"transparent",
+            color:view===n.id?"#f4d03f":"#6b7280",
+            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+            gap:2,position:"relative",padding:0,boxSizing:"border-box",
+            borderTop: view===n.id?"2px solid #f4d03f":"2px solid transparent"
+          }}>
+            <span style={{ fontSize:22,lineHeight:1 }}>{n.icon}</span>
+            <span style={{ fontSize:9,fontWeight:600,lineHeight:1 }}>{n.label}</span>
+            {n.id==="shift"&&currentShift&&<span style={{ position:"absolute",top:6,right:"calc(50% - 14px)",width:7,height:7,borderRadius:"50%",background:"#16a34a" }} />}
+            {n.id==="pos"&&parkedOrders.length>0&&<span style={{ position:"absolute",top:6,right:"calc(50% - 18px)",minWidth:16,height:16,borderRadius:8,background:"#ea580c",color:"#fff",fontSize:9,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px" }}>{parkedOrders.length}</span>}
+          </button>
+        ))}
+      </div>
+      {shiftModal&&<ShiftModal type={shiftModal} currentShift={currentShift} sales={sales} onSubmit={shiftModal==="open"?openShift:closeShift} onCancel={()=>setShiftModal(null)} />}
+    </div>
+  );
+
+  /* ── TABLET / DESKTOP layout: left sidebar ── */
+  return (
+    <div style={{ display:"flex",width:"100%",height:"100vh",fontFamily:"'Noto Sans Lao','Segoe UI',sans-serif",overflow:"hidden" }}>
+      <div style={{ width:70,minWidth:70,maxWidth:70,background:"#1a1a2e",display:"flex",flexDirection:"column",alignItems:"center",padding:"14px 0",gap:3,flexShrink:0,overflow:"hidden" }}>
+        <div style={{ fontSize:26,marginBottom:14,lineHeight:1 }}>🥐</div>
+        {allowed.map(n=><NavBtn key={n.id} n={n} />)}
+        <div style={{ flex:1 }} />
+        <div style={{ display:"flex",flexDirection:"column",gap:4,marginBottom:8 }}>
+          <ModeBtn m="phone" icon="📱" label="Phone" />
+          <ModeBtn m="tablet" icon="📲" label="Tablet" />
+          <ModeBtn m="desktop" icon="💻" label="Desktop" />
+        </div>
+        <div style={{ textAlign:"center",marginBottom:6 }}>
+          <div style={{ fontSize:9,color:"#4b5563",marginBottom:4 }}>{ROLES[role].label}</div>
+          <button onClick={()=>{setRole(null);setView("pos");}} style={{ width:38,height:38,minWidth:38,borderRadius:9,border:"none",background:"rgba(255,255,255,0.1)",color:"#6b7280",cursor:"pointer",fontSize:15,padding:0,boxSizing:"border-box",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto" }}>🔓</button>
+        </div>
+      </div>
+      <ViewContent />
       {shiftModal&&<ShiftModal type={shiftModal} currentShift={currentShift} sales={sales} onSubmit={shiftModal==="open"?openShift:closeShift} onCancel={()=>setShiftModal(null)} />}
     </div>
   );

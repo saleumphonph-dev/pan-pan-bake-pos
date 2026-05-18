@@ -408,65 +408,10 @@ input, textarea, select {
   }
 }
 
-/* ========================================
-   JS-DRIVEN LAYOUT MODES
-   Toggled by the device-mode selector in App.
-   ======================================== */
-
-/* PHONE mode — top header + bottom tab bar */
-.layout-phone {
-  flex-direction: column !important;
-}
-
-.layout-phone .nav-rail {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  width: 100vw;
-  height: 64px;
-  flex-direction: row !important;
-  padding: 0 !important;
-  gap: 0 !important;
-  z-index: 100;
-  border-top: 1px solid rgba(255,255,255,0.06);
-}
-
-.layout-phone .nav-rail .nav-logo,
-.layout-phone .nav-rail .nav-role-label {
-  display: none;
-}
-
-.layout-phone .nav-rail .nav-btn {
-  flex: 1;
-  width: auto !important;
-  height: 64px !important;
-  border-radius: 0 !important;
-}
-
-.layout-phone .nav-rail .nav-mode-toggle {
-  display: none; /* moved to top header on phone */
-}
-
-.layout-phone .nav-rail .nav-logout-wrap {
-  display: none; /* moved to top header on phone */
-}
-
-.layout-phone .top-header {
-  display: flex !important;
-}
-
-.layout-phone .view-content {
-  padding-bottom: 64px;
-}
-
-/* TABLET mode — left sidebar but narrower cart */
+/* Layout modes are fully JS-driven (conditional rendering in App).
+   Only the cart-sidebar width needs a CSS assist for tablet mode. */
 .layout-tablet .cart-sidebar {
   width: 280px !important;
-}
-
-/* DESKTOP mode — current default, no overrides needed */
-.top-header {
-  display: none;
 }
 
 /* === EXTRA SMALL (< 375px) === */
