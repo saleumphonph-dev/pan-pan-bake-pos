@@ -1850,7 +1850,7 @@ export default function App() {
       </div>
       <div style={{ background:"rgba(255,255,255,0.07)",borderRadius:16,padding:"28px 36px",width:320 }}>
         <div style={{ fontSize:15,color:"#e5e7eb",fontWeight:600,textAlign:"center",marginBottom:16 }}>ເຂົ້າສູ່ລະບົບ / Login</div>
-        <input type="password" placeholder="ໃສ່ PIN" value={pin} onChange={e=>{setPin(e.target.value);setPinErr("");}}
+        <input type="password" inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code" placeholder="ໃສ່ PIN" value={pin} onChange={e=>{setPin(e.target.value);setPinErr("");}}
           style={{ width:"100%",padding:"12px 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.2)",background:"rgba(255,255,255,0.1)",color:"#fff",fontSize:20,textAlign:"center",letterSpacing:8,outline:"none",marginBottom:12,boxSizing:"border-box" }} />
         {pinErr&&<div style={{ color:"#f87171",fontSize:13,textAlign:"center",marginBottom:10 }}>{pinErr}</div>}
         <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
