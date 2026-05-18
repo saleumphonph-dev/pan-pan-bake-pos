@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, checkConnection } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, checkConnection, wipeAllCloudData } from "./src/lib/supabase.js";
 
 // ============================================================
 // CONSTANTS
@@ -1383,7 +1383,7 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
 // ============================================================
 // ADMIN with Add-ons management
 // ============================================================
-function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons, qrImage, setQrImage, shopInfo, setShopInfo }) {
+function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons, qrImage, setQrImage, shopInfo, setShopInfo, role, onResetTestData }) {
   const [tab,setTab]=useState("menu");
   const [editItem,setEditItem]=useState(null);
   const [filterCat,setFilterCat]=useState("all");
@@ -1656,6 +1656,19 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             )}
             <input ref={qrRef} type="file" accept="image/*" onChange={e=>handleImg(e,"qr")} style={{ display:"none" }} />
           </div>
+          {role==="owner"&&(
+            <div style={{ background:"#fff",borderRadius:14,padding:20,border:"2px solid #fecaca",marginTop:20 }}>
+              <div style={{ fontSize:15,fontWeight:700,color:"#dc2626",marginBottom:6 }}>⚠️ Danger Zone — ລ້າງຂໍ້ມູນທົດສອບ</div>
+              <div style={{ fontSize:12,color:"#6b7280",marginBottom:14,lineHeight:1.6 }}>
+                ລຶບລາຍການຂາຍ, ກະ, ແລະ ລາຍຈ່າຍທັງໝົດ (ທັງໃນເຄື່ອງ ແລະ ໃນ Cloud).<br/>
+                Menu, settings, QR ຈະຍັງຄົງຢູ່.<br/>
+                <span style={{ color:"#dc2626",fontWeight:600 }}>Wipes all sales / shifts / expenses (local + cloud). Menu &amp; settings stay.</span>
+              </div>
+              <button onClick={onResetTestData} style={{ padding:"10px 18px",background:"#dc2626",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>
+                🗑️ Reset Test Data
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1774,6 +1787,18 @@ export default function App() {
   const openShift=({cash,notes})=>{ const s={id:genId(),openedAt:new Date().toISOString(),openingCash:cash,cashier:ROLES[role].label,notes};const u=[...shifts,s];setShifts(u);stor.set("shifts",u);syncShift(s);setShiftModal(null); };
   const closeShift=({cash,notes,expected})=>{ const u=shifts.map(s=>s.id===currentShift.id?{...s,closedAt:new Date().toISOString(),closingCash:cash,expectedCash:expected,variance:cash-expected,notes:(s.notes?s.notes+" | ":"")+(notes||"")}:s);setShifts(u);stor.set("shifts",u);syncShift(u.find(s=>s.id===currentShift.id));setShiftModal(null); };
 
+  const resetTestData=async()=>{
+    const c1=window.prompt("⚠️ ນີ້ຈະລຶບ Sales, Shifts, ແລະ Expenses ທັງໝົດ (ທັງໃນເຄື່ອງ ແລະ ໃນ Cloud).\nMenu, settings, QR ຈະຍັງຄົງຢູ່.\n\nພິມ RESET ເພື່ອຢືນຢັນ:");
+    if(c1!=="RESET")return;
+    setSales([]); stor.set("sales",[]);
+    setShifts([]); stor.set("shifts",[]);
+    setParkedOrders([]); stor.set("parked",[]);
+    stor.set("expenses",[]);
+    const r=await wipeAllCloudData();
+    if(r.ok) alert("✅ ລ້າງຂໍ້ມູນທົດສອບສຳເລັດ\nTest data wiped (local + cloud).");
+    else alert("⚠️ ລຶບໃນເຄື່ອງສຳເລັດ ແຕ່ Cloud ບໍ່ສຳເລັດ: "+r.error+"\nLocal cleared; cloud wipe failed.");
+  };
+
   const allowed=NAV.filter(n=>n.roles.includes(role||"cashier"));
 
   if(!role) return (
@@ -1823,7 +1848,7 @@ export default function App() {
         {view==="dashboard"&&<DashboardView sales={sales} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
         {view==="accounting"&&<AccountingView sales={sales} />}
-        {view==="admin"&&<AdminView menu={menu} setMenu={setMenu} categories={categories} setCategories={setCategories} addons={addons} setAddons={setAddons} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfo} />}
+        {view==="admin"&&<AdminView menu={menu} setMenu={setMenu} categories={categories} setCategories={setCategories} addons={addons} setAddons={setAddons} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfo} role={role} onResetTestData={resetTestData} />}
       </div>
       {shiftModal&&<ShiftModal type={shiftModal} currentShift={currentShift} sales={sales} onSubmit={shiftModal==="open"?openShift:closeShift} onCancel={()=>setShiftModal(null)} />}
     </div>

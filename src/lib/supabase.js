@@ -60,3 +60,18 @@ export async function checkConnection() {
     return "offline";
   }
 }
+
+/** Wipe all rows from sales + shifts tables (used by Owner "Reset Test Data") */
+export async function wipeAllCloudData() {
+  if (!supabase) return { ok: true, note: "no-db" };
+  try {
+    const s = await supabase.from("sales").delete().neq("id", "__never__");
+    const h = await supabase.from("shifts").delete().neq("id", "__never__");
+    if (s.error || h.error) {
+      return { ok: false, error: (s.error || h.error).message };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
