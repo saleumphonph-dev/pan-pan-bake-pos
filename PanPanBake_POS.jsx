@@ -652,16 +652,20 @@ function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrIm
             const hasAddons = ADDON_CATEGORIES.includes(item.cat) && addons.length > 0;
             return (
               <button key={item.id} onClick={()=>onMenuClick(item)} style={{
-                background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,padding:"12px 10px",
-                cursor:"pointer",textAlign:"center",position:"relative",boxShadow:"0 1px 4px rgba(0,0,0,0.06)"
+                background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,padding:0,
+                cursor:"pointer",textAlign:"center",position:"relative",boxShadow:"0 1px 4px rgba(0,0,0,0.06)",
+                overflow:"hidden",display:"flex",flexDirection:"column"
               }}>
-                {item.popular && <span style={{ position:"absolute",top:6,right:6,background:"#f4d03f",color:"#1a1a2e",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4 }}>🔥</span>}
-                {hasAddons && <span style={{ position:"absolute",top:6,left:6,background:"#ede9fe",color:"#7c3aed",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4 }}>✨</span>}
-                {item.image ? <img src={item.image} alt={item.name} style={{ width:60,height:60,objectFit:"cover",borderRadius:8,margin:"0 auto 6px",display:"block" }} />
-                  : <div style={{ fontSize:30,marginBottom:6 }}>{item.emoji}</div>}
-                <div style={{ fontSize:12,fontWeight:600,color:"#1a1a2e",lineHeight:1.3 }}>{item.name}</div>
-                <div style={{ fontSize:11,color:"#6b7280",marginBottom:6 }}>{item.nameLao}</div>
-                <div style={{ fontSize:13,fontWeight:700,color:"#7c3aed" }}>{formatKip(item.price)}</div>
+                {item.popular && <span style={{ position:"absolute",top:6,right:6,background:"#f4d03f",color:"#1a1a2e",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4,zIndex:1 }}>🔥</span>}
+                {hasAddons && <span style={{ position:"absolute",top:6,left:6,background:"#ede9fe",color:"#7c3aed",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4,zIndex:1 }}>✨</span>}
+                {item.image
+                  ? <img src={item.image} alt={item.name} style={{ width:"100%",height:110,objectFit:"cover",display:"block",flexShrink:0 }} />
+                  : <div style={{ width:"100%",height:110,display:"flex",alignItems:"center",justifyContent:"center",background:"#f9fafb",fontSize:52,flexShrink:0 }}>{item.emoji}</div>}
+                <div style={{ padding:"8px 8px 10px",display:"flex",flexDirection:"column",gap:2 }}>
+                  <div style={{ fontSize:12,fontWeight:600,color:"#1a1a2e",lineHeight:1.3 }}>{item.name}</div>
+                  <div style={{ fontSize:11,color:"#6b7280" }}>{item.nameLao}</div>
+                  <div style={{ fontSize:13,fontWeight:700,color:"#7c3aed",marginTop:2 }}>{formatKip(item.price)}</div>
+                </div>
               </button>
             );
           })}
