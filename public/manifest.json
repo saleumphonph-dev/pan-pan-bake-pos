@@ -1,0 +1,15 @@
+{
+  "name": "Pan Pan Bake POS",
+  "short_name": "Pan Pan Bake",
+  "description": "Pan Pan Bake — Point of Sale",
+  "start_url": "/pan-pan-bake-pos/",
+  "scope": "/pan-pan-bake-pos/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#1a1a2e",
+  "theme_color": "#1a1a2e",
+  "icons": [
+    { "src": "/pan-pan-bake-pos/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/pan-pan-bake-pos/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
