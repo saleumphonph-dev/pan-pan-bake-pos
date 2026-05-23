@@ -1899,7 +1899,7 @@ export default function App() {
   /* ── PHONE layout: top header + content + bottom tab bar ── */
   if (mode === "phone") return (
     <div style={{ display:"flex",flexDirection:"column",width:"100%",height:"100vh",fontFamily:"'Noto Sans Lao','Segoe UI',sans-serif",overflow:"hidden" }}>
-      <div style={{ position:"fixed",top:0,left:0,right:0,height:44,background:"#1a1a2e",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 12px",zIndex:200,borderBottom:"1px solid rgba(255,255,255,0.06)",flexShrink:0 }}>
+      <div style={{ position:"fixed",top:0,left:0,right:0,height:"calc(44px + env(safe-area-inset-top, 0px))",background:"#1a1a2e",display:"flex",alignItems:"flex-end",justifyContent:"space-between",padding:"0 12px",paddingTop:"env(safe-area-inset-top, 0px)",paddingBottom:8,zIndex:200,borderBottom:"1px solid rgba(255,255,255,0.06)",flexShrink:0,boxSizing:"border-box" }}>
         <div style={{ display:"flex",alignItems:"center",gap:8 }}>
           <span style={{ fontSize:18 }}>🥐</span>
           <span style={{ fontSize:11,color:"#9ca3af" }}>{ROLES[role].label}</span>
@@ -1911,7 +1911,7 @@ export default function App() {
           <button onClick={()=>{setRole(null);setView("pos");}} style={{ width:26,height:26,minWidth:26,borderRadius:6,border:"none",background:"rgba(255,255,255,0.1)",color:"#9ca3af",cursor:"pointer",fontSize:13,padding:0,boxSizing:"border-box",display:"flex",alignItems:"center",justifyContent:"center" }}>🔓</button>
         </div>
       </div>
-      <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden",paddingTop:44,paddingBottom:64 }}>
+      <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden",paddingTop:"calc(44px + env(safe-area-inset-top, 0px))",paddingBottom:"calc(64px + env(safe-area-inset-bottom, 0px))" }}>
         {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
         {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
         {view==="dashboard"&&<DashboardView sales={sales} />}
@@ -1919,7 +1919,7 @@ export default function App() {
         {view==="accounting"&&<AccountingView sales={sales} />}
         {view==="admin"&&<AdminView menu={menu} setMenu={setMenu} categories={categories} setCategories={setCategories} addons={addons} setAddons={setAddons} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfo} role={role} onResetTestData={resetTestData} />}
       </div>
-      <div style={{ position:"fixed",bottom:0,left:0,right:0,height:64,background:"#1a1a2e",display:"flex",alignItems:"center",zIndex:200,borderTop:"1px solid rgba(255,255,255,0.08)" }}>
+      <div style={{ position:"fixed",bottom:0,left:0,right:0,height:"calc(64px + env(safe-area-inset-bottom, 0px))",background:"#1a1a2e",display:"flex",alignItems:"flex-start",paddingBottom:"env(safe-area-inset-bottom, 0px)",zIndex:200,borderTop:"1px solid rgba(255,255,255,0.08)",boxSizing:"border-box" }}>
         {allowed.map(n=>(
           <button key={n.id} onClick={()=>setView(n.id)} style={{
             flex:1,height:64,border:"none",cursor:"pointer",
