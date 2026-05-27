@@ -193,7 +193,10 @@ ${order.payment === "cash" && order.received ? `
 <div class="row" style="color:#16a34a"><span>ຮັບເງິນ</span><span>${formatKip(order.received)}</span></div>
 <div class="row" style="color:#7c3aed"><span>ເງິນທອນ</span><span>${formatKip(order.received - net)}</span></div>` : ""}
 <div class="footer">${shopInfo.footer}</div>
-<script>window.onload=function(){window.focus();window.print();}</script>
+<script>
+window.onload=function(){window.focus();window.print();};
+window.addEventListener('afterprint',function(){window.close();});
+</script>
 </body></html>`;
 
   const w = window.open("", "_blank", "width=400,height=600");
