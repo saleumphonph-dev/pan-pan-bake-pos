@@ -1722,17 +1722,31 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             <input ref={qrRef} type="file" accept="image/*" onChange={e=>handleImg(e,"qr")} style={{ display:"none" }} />
           </div>
           {role==="owner"&&(
-            <div style={{ background:"#fff",borderRadius:14,padding:20,border:"2px solid #fecaca",marginTop:20 }}>
-              <div style={{ fontSize:15,fontWeight:700,color:"#dc2626",marginBottom:6 }}>⚠️ Danger Zone — ລ້າງຂໍ້ມູນທົດສອບ</div>
-              <div style={{ fontSize:12,color:"#6b7280",marginBottom:14,lineHeight:1.6 }}>
-                ລຶບລາຍການຂາຍ, ກະ, ແລະ ລາຍຈ່າຍທັງໝົດ (ທັງໃນເຄື່ອງ ແລະ ໃນ Cloud).<br/>
-                Menu, settings, QR ຈະຍັງຄົງຢູ່.<br/>
-                <span style={{ color:"#dc2626",fontWeight:600 }}>Wipes all sales / shifts / expenses (local + cloud). Menu &amp; settings stay.</span>
+            <>
+              <div style={{ background:"#fff",borderRadius:14,padding:20,border:"2px solid #fecaca",marginTop:20 }}>
+                <div style={{ fontSize:15,fontWeight:700,color:"#dc2626",marginBottom:6 }}>⚠️ Danger Zone — ລ້າງຂໍ້ມູນທົດສອບ</div>
+                <div style={{ fontSize:12,color:"#6b7280",marginBottom:14,lineHeight:1.6 }}>
+                  ລຶບລາຍການຂາຍ, ກະ, ແລະ ລາຍຈ່າຍທັງໝົດ (ທັງໃນເຄື່ອງ ແລະ ໃນ Cloud).<br/>
+                  Menu, settings, QR ຈະຍັງຄົງຢູ່.<br/>
+                  <span style={{ color:"#dc2626",fontWeight:600 }}>Wipes all sales / shifts / expenses (local + cloud). Menu &amp; settings stay.</span>
+                </div>
+                <button onClick={onResetTestData} style={{ padding:"10px 18px",background:"#dc2626",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>
+                  🗑️ Reset Test Data
+                </button>
               </div>
-              <button onClick={onResetTestData} style={{ padding:"10px 18px",background:"#dc2626",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>
-                🗑️ Reset Test Data
-              </button>
-            </div>
+
+              <div style={{ background:"#fff",borderRadius:14,padding:20,border:"2px solid #bfdbfe",marginTop:16 }}>
+                <div style={{ fontSize:15,fontWeight:700,color:"#2563eb",marginBottom:6 }}>🔄 Force Refresh (PWA)</div>
+                <div style={{ fontSize:12,color:"#6b7280",marginBottom:14,lineHeight:1.6 }}>
+                  ລຶບ cache ທັງໝົດ ແລະ ໂຫລດຂໍ້ມູນໃໝ່ຈາກ server.<br/>
+                  ບໍ່ຈຳເປັນ uninstall/reinstall app ອີກຕໍ່ໄປ.<br/>
+                  <span style={{ color:"#2563eb",fontWeight:600 }}>Clears PWA cache &amp; service workers. No need to uninstall &amp; reinstall app.</span>
+                </div>
+                <button onClick={()=>{if(window.confirm("Clear all PWA cache and refresh? You'll be back at the login screen.")){caches.keys().then(names=>Promise.all(names.map(n=>caches.delete(n))));navigator.serviceWorker.getRegistrations().then(regs=>regs.forEach(r=>r.unregister()));window.location.href=window.location.href.split("?")[0]+"?refresh="+Date.now();}}} style={{ padding:"10px 18px",background:"#2563eb",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>
+                  🔄 Force Refresh
+                </button>
+              </div>
+            </>
           )}
         </div>
       )}
