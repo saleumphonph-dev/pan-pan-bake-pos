@@ -1338,8 +1338,9 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
   const [search,setSearch]=useState("");
   const [voidTarget,setVoidTarget]=useState(null);
   const voidOrder=(order,reason)=>{
-    const updated=sales.map(s=>s.id===order.id?{...s,voided:true,voidReason:reason,voidedAt:new Date().toISOString()}:s);
-    setSales(updated); stor.set("sales",updated); setVoidTarget(null);
+    const voidedOrder={...order,voided:true,voidReason:reason,voidedAt:new Date().toISOString()};
+    const updated=sales.map(s=>s.id===order.id?voidedOrder:s);
+    setSales(updated); stor.set("sales",updated); syncOrder(voidedOrder); setVoidTarget(null);
   };
   const filtered=sales.filter(s=>s.id.includes(search)||s.items.some(i=>i.name.toLowerCase().includes(search.toLowerCase()))).slice().reverse().slice(0,150);
 
