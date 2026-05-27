@@ -969,19 +969,44 @@ function SyncBadge() {
 // ── Dashboard ─────────────────────────────────────────────────
 function DashboardView({ sales }) {
   const [range, setRange] = useState("today");
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
   const [aiInsight, setAiInsight] = useState("");
   const [loadingAI, setLoadingAI] = useState(false);
   const now = new Date();
 
   const orderNet = (o) => o.items.reduce((s,i) => s + itemPrice(i)*i.qty, 0) - (o.discount||0);
 
+  // Parse selected date and compute range boundaries
+  const selDate = new Date(selectedDate);
+  let rangeStart, rangeEnd;
+
+  if (range === "today") {
+    rangeStart = new Date(selDate);
+    rangeStart.setHours(0, 0, 0, 0);
+    rangeEnd = new Date(selDate);
+    rangeEnd.setHours(23, 59, 59, 999);
+  } else if (range === "week") {
+    rangeStart = new Date(selDate);
+    rangeStart.setDate(selDate.getDate() - 7);
+    rangeStart.setHours(0, 0, 0, 0);
+    rangeEnd = new Date(selDate);
+    rangeEnd.setHours(23, 59, 59, 999);
+  } else if (range === "month") {
+    rangeStart = new Date(selDate.getFullYear(), selDate.getMonth(), 1);
+    rangeStart.setHours(0, 0, 0, 0);
+    rangeEnd = new Date(selDate.getFullYear(), selDate.getMonth() + 1, 0);
+    rangeEnd.setHours(23, 59, 59, 999);
+  } else if (range === "annual") {
+    rangeStart = new Date(selDate.getFullYear(), 0, 1);
+    rangeStart.setHours(0, 0, 0, 0);
+    rangeEnd = new Date(selDate.getFullYear(), 11, 31);
+    rangeEnd.setHours(23, 59, 59, 999);
+  }
+
   const filtered = sales.filter(s => {
     if (s.voided || s.payment === "foc") return false;
     const d = new Date(s.date);
-    if (range === "today") return d.toDateString() === now.toDateString();
-    if (range === "week")  { const wk = new Date(now); wk.setDate(now.getDate()-7); return d >= wk; }
-    if (range === "month") return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
-    return true;
+    return d >= rangeStart && d <= rangeEnd;
   });
 
   const totalRevenue = filtered.reduce((s,o) => s + orderNet(o), 0);
@@ -990,12 +1015,10 @@ function DashboardView({ sales }) {
   const cashSales    = filtered.filter(o=>o.payment==="cash").reduce((s,o)=>s+orderNet(o),0);
   const qrSales      = filtered.filter(o=>o.payment==="qr").reduce((s,o)=>s+orderNet(o),0);
   const transferSales= filtered.filter(o=>o.payment==="transfer").reduce((s,o)=>s+orderNet(o),0);
-  const focCount     = sales.filter(s => {
+  const focCount = sales.filter(s => {
     if (s.payment !== "foc") return false;
     const d = new Date(s.date);
-    if (range === "today") return d.toDateString() === now.toDateString();
-    if (range === "week")  { const wk = new Date(now); wk.setDate(now.getDate()-7); return d >= wk; }
-    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    return d >= rangeStart && d <= rangeEnd;
   }).length;
 
   // Top items
@@ -1062,12 +1085,20 @@ function DashboardView({ sales }) {
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
           <SyncBadge />
-          <div style={{ display:"flex", gap:6 }}>
-            {[["today","ມື້ນີ້"],["week","7ວັນ"],["month","ເດືອນ"]].map(([v,l]) => (
-              <button key={v} onClick={()=>setRange(v)} style={{ padding:"8px 14px", borderRadius:20, border:"none", cursor:"pointer", background:range===v?"#1a1a2e":"#fff", color:range===v?"#f4d03f":"#374151", fontWeight:range===v?700:500, fontSize:13 }}>{l}</button>
-            ))}
-          </div>
         </div>
+      </div>
+
+      {/* Range & Date Selection */}
+      <div style={{ display:"flex", gap:8, alignItems:"center", marginBottom:16, flexWrap:"wrap" }}>
+        <div style={{ display:"flex", gap:6 }}>
+          {[["today","ມື້ນີ້"],["week","7ວັນ"],["month","ເດືອນ"],["annual","ປີ"]].map(([v,l]) => (
+            <button key={v} onClick={()=>setRange(v)} style={{ padding:"8px 14px", borderRadius:20, border:"none", cursor:"pointer", background:range===v?"#1a1a2e":"#fff", color:range===v?"#f4d03f":"#374151", fontWeight:range===v?700:500, fontSize:13 }}>{l}</button>
+          ))}
+        </div>
+        <input type="date" value={selectedDate} onChange={e=>setSelectedDate(e.target.value)} style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #e5e7eb", fontSize:13 }} />
+        <button onClick={()=>{const d=new Date(selectedDate);d.setDate(d.getDate()-1);setSelectedDate(d.toISOString().slice(0,10));}} style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #e5e7eb", background:"#fff", cursor:"pointer", fontSize:12 }}>← ກ່ອນ</button>
+        <button onClick={()=>{const d=new Date(selectedDate);d.setDate(d.getDate()+1);setSelectedDate(d.toISOString().slice(0,10));}} style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #e5e7eb", background:"#fff", cursor:"pointer", fontSize:12 }}>ຕໍ່ไป →</button>
+        <button onClick={()=>setSelectedDate(new Date().toISOString().slice(0,10))} style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #e5e7eb", background:"#f0f9ff", color:"#0284c7", cursor:"pointer", fontSize:12, fontWeight:600 }}>ວันນີ້</button>
       </div>
 
       {/* KPI Cards */}
@@ -1336,19 +1367,45 @@ function AccountingView({ sales }) {
 // ============================================================
 function SalesHistoryView({ sales, setSales, shopInfo }) {
   const [search,setSearch]=useState("");
+  const [dateFrom,setDateFrom]=useState("");
+  const [dateTo,setDateTo]=useState("");
   const [voidTarget,setVoidTarget]=useState(null);
   const voidOrder=(order,reason)=>{
     const voidedOrder={...order,voided:true,voidReason:reason,voidedAt:new Date().toISOString()};
     const updated=sales.map(s=>s.id===order.id?voidedOrder:s);
     setSales(updated); stor.set("sales",updated); syncOrder(voidedOrder); setVoidTarget(null);
   };
-  const filtered=sales.filter(s=>s.id.includes(search)||s.items.some(i=>i.name.toLowerCase().includes(search.toLowerCase()))).slice().reverse().slice(0,150);
+
+  const filtered=sales.filter(s=>{
+    // Text search: bill ID or item name
+    const matchesSearch=search===""||s.id.includes(search)||s.items.some(i=>i.name.toLowerCase().includes(search.toLowerCase()));
+    if(!matchesSearch)return false;
+
+    // Date range filter
+    if(dateFrom||dateTo){
+      const sDate=new Date(s.date).toISOString().slice(0,10);
+      if(dateFrom&&sDate<dateFrom)return false;
+      if(dateTo&&sDate>dateTo)return false;
+    }
+    return true;
+  }).slice().reverse().slice(0,150);
 
   return (
     <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
-      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16 }}>
         <div><h1 style={{ margin:0,fontSize:22,fontWeight:700 }}>🧾 ປະຫວັດການຂາຍ</h1><div style={{ fontSize:13,color:"#6b7280" }}>{sales.length} ໃບ</div></div>
-        <input placeholder="ຄົ້ນຫາ..." value={search} onChange={e=>setSearch(e.target.value)} style={{ padding:"8px 14px",borderRadius:20,border:"1px solid #e5e7eb",fontSize:13 }} />
+      </div>
+
+      {/* Search & Date Filters */}
+      <div style={{ display:"flex",gap:8,alignItems:"center",marginBottom:20,flexWrap:"wrap" }}>
+        <input placeholder="ຄົ້ນຫາບິນ/ສິນຄ້າ..." value={search} onChange={e=>setSearch(e.target.value)} style={{ padding:"8px 14px",borderRadius:20,border:"1px solid #e5e7eb",fontSize:13,flex:1,minWidth:200 }} />
+        <div style={{ display:"flex",gap:6,alignItems:"center",flexWrap:"wrap" }}>
+          <label style={{ fontSize:12,color:"#6b7280",whiteSpace:"nowrap" }}>ວັນທີ່ເລີ່ມ:</label>
+          <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{ padding:"6px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:12 }} />
+          <label style={{ fontSize:12,color:"#6b7280",whiteSpace:"nowrap" }}>ວັນທີ່ສິ້ນ:</label>
+          <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{ padding:"6px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:12 }} />
+          {(dateFrom||dateTo)&&<button onClick={()=>{setDateFrom("");setDateTo("");}} style={{ padding:"6px 10px",borderRadius:8,border:"1px solid #e5e7eb",background:"#fee2e2",color:"#dc2626",cursor:"pointer",fontSize:11,fontWeight:600 }}>ລຶບກັ່ນ</button>}
+        </div>
       </div>
       <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden" }}>
         {filtered.length===0?<div style={{ padding:40,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີ</div>:filtered.map((s,i)=>{
