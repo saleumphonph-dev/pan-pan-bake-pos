@@ -23,7 +23,7 @@ const INITIAL_CATEGORIES = [
 ];
 
 // Categories that support add-ons (milk swap, extra shots, etc.)
-const ADDON_CATEGORIES = ["coffee", "matcha"];
+const ADDON_CATEGORIES = ["coffee", "matcha", "smoothie", "drinks"];
 
 // Categories that support sweetness level selection (all drinks, no charge)
 const DRINK_CATEGORIES = ["coffee", "matcha", "smoothie", "drinks"];
@@ -1676,7 +1676,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
       {tab==="addons"&&(
         <>
           <div style={{ background:"#ede9fe",border:"1px solid #c4b5fd",borderRadius:10,padding:12,marginBottom:14,fontSize:13,color:"#5b21b6" }}>
-            ℹ️ Add-ons ຈະສະແດງເປັນ modal ໃຫ້ລູກຄ້າເລືອກ ເມື່ອກົດເມນູໃນໝວດ <b>ກາເຟ ☕</b> ແລະ <b>ມັດຊາ 🍵</b>
+            ℹ️ Add-ons ຈະສະແດງເປັນ modal ໃຫ້ລູກຄ້າເລືອກ ເມື່ອກົດເມນູໃນໝວດເຄື່ອງດື່ມ: <b>ກາເຟ ☕</b>, <b>ມັດຊາ 🍵</b>, <b>ສະມູດທີ 🥤</b> ແລະ <b>ເຄື່ອງດື່ມ 🧃</b>
           </div>
           <div style={{ display:"flex",justifyContent:"space-between",marginBottom:12 }}>
             <div style={{ fontSize:13,color:"#6b7280" }}>{addons.length} Add-ons</div>
