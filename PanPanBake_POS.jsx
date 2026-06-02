@@ -25,6 +25,17 @@ const INITIAL_CATEGORIES = [
 // Categories that support add-ons (milk swap, extra shots, etc.)
 const ADDON_CATEGORIES = ["coffee", "matcha"];
 
+// Categories that support sweetness level selection (all drinks, no charge)
+const DRINK_CATEGORIES = ["coffee", "matcha", "smoothie", "drinks"];
+
+// Sweetness levels — free, no additional charge
+const SWEETNESS_LEVELS = [
+  { id: "none",   lao: "ບໍ່ຫວານ",     en: "No Sugar",     emoji: "🚫" },
+  { id: "less",   lao: "ຫວານໜ້ອຍ",   en: "Less Sweet",   emoji: "🍃" },
+  { id: "normal", lao: "ຫວານປົກກະຕິ", en: "Normal",       emoji: "🥤" },
+  { id: "extra",  lao: "ຫວານພິເສດ",  en: "Extra Sweet",  emoji: "🍯" },
+];
+
 const DEFAULT_ADDONS = [
   { id: "oat", name: "Oat Milk", nameLao: "ນົມໂອ໋ດ", price: 5000, group: "milk" },
   { id: "almond", name: "Almond Milk", nameLao: "ນົມອັນມັນ", price: 5000, group: "milk" },
@@ -123,8 +134,10 @@ const fmtDT = (d) => `${fmtDate(d)} ${fmtTime(d)}`;
 
 // Calculate price including add-ons
 const itemPrice = (item) => item.price + (item.addons || []).reduce((s, a) => s + a.price, 0);
-// Unique key for cart line (item id + addon ids)
-const cartKey = (item) => `${item.id}:${(item.addons || []).map(a => a.id).sort().join(",")}`;
+// Unique key for cart line (item id + addon ids + sweetness)
+const cartKey = (item) => `${item.id}:${(item.addons || []).map(a => a.id).sort().join(",")}:${item.sweetness || ""}`;
+// Lao label for a sweetness level id (empty string if none/normal-unset)
+const sweetLabel = (id) => { const s = SWEETNESS_LEVELS.find(x => x.id === id); return s ? `${s.emoji} ${s.lao}` : ""; };
 
 const stor = {
   get: (k, def) => { try { const v = localStorage.getItem("ppb_" + k); return v ? JSON.parse(v) : def; } catch { return def; } },
@@ -138,9 +151,10 @@ function printReceipt(order, shopInfo) {
   const net = order.total - (order.discount || 0);
   const itemsHtml = order.items.map(it => {
     const addonText = (it.addons || []).map(a => `+ ${a.nameLao} (${formatKip(a.price)})`).join("<br>");
+    const sweetText = it.sweetness ? sweetLabel(it.sweetness) : "";
     const linePrice = itemPrice(it);
     return `<tr>
-      <td style="padding:2px 0">${it.emoji} ${it.name}<br><small style="color:#888">${it.nameLao}</small>${addonText ? `<br><small style="color:#7c3aed">${addonText}</small>` : ""}</td>
+      <td style="padding:2px 0">${it.emoji} ${it.name}<br><small style="color:#888">${it.nameLao}</small>${sweetText ? `<br><small style="color:#16a34a">${sweetText}</small>` : ""}${addonText ? `<br><small style="color:#7c3aed">${addonText}</small>` : ""}</td>
       <td style="text-align:right;padding:2px 0">${it.qty}×${formatKip(linePrice)}</td>
       <td style="text-align:right;padding:2px 0;font-weight:600">${formatKip(linePrice * it.qty)}</td>
     </tr>`;
@@ -210,9 +224,13 @@ window.addEventListener('afterprint',function(){window.close();});
 // ============================================================
 function AddonModal({ item, addons, onConfirm, onCancel }) {
   const [selected, setSelected] = useState([]);
+  const [sweetness, setSweetness] = useState("normal");
+
+  // Show paid add-ons only for coffee/matcha; sweetness shows for all drinks
+  const showAddons = ADDON_CATEGORIES.includes(item.cat) && addons.length > 0;
 
   const groups = {};
-  addons.forEach(a => { if (!groups[a.group]) groups[a.group] = []; groups[a.group].push(a); });
+  if (showAddons) addons.forEach(a => { if (!groups[a.group]) groups[a.group] = []; groups[a.group].push(a); });
 
   const toggle = (addon) => {
     const exists = selected.find(s => s.id === addon.id);
@@ -245,6 +263,30 @@ function AddonModal({ item, addons, onConfirm, onCancel }) {
         </div>
 
         <div style={{ flex:1,overflowY:"auto",padding:"14px 20px" }}>
+          {/* Sweetness Level — free, all drinks */}
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:13,fontWeight:700,color:"#1a1a2e",marginBottom:8 }}>
+              🍬 ລະດັບຄວາມຫວານ / Sweetness
+              <span style={{ fontSize:10,color:"#16a34a",fontWeight:400,marginLeft:6 }}>(ບໍ່ຄິດເງິນເພີ່ມ / free)</span>
+            </div>
+            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8 }}>
+              {SWEETNESS_LEVELS.map(sw => {
+                const isOn = sweetness === sw.id;
+                return (
+                  <button key={sw.id} onClick={() => setSweetness(sw.id)} style={{
+                    padding:"10px 12px",borderRadius:10,cursor:"pointer",textAlign:"left",
+                    border: isOn ? "2px solid #7c3aed" : "1px solid #e5e7eb",
+                    background: isOn ? "#7c3aed" : "#fff",
+                    color: isOn ? "#fff" : "#374151",
+                  }}>
+                    <div style={{ fontSize:13,fontWeight:600 }}>{isOn && "✓ "}{sw.emoji} {sw.lao}</div>
+                    <div style={{ fontSize:11,color: isOn ? "#e9d5ff" : "#6b7280" }}>{sw.en}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {Object.entries(groups).map(([groupId, groupAddons]) => (
             <div key={groupId} style={{ marginBottom:16 }}>
               <div style={{ fontSize:13,fontWeight:700,color:"#1a1a2e",marginBottom:8 }}>
@@ -279,7 +321,7 @@ function AddonModal({ item, addons, onConfirm, onCancel }) {
           </div>
           <div style={{ display:"flex",gap:8 }}>
             <button onClick={onCancel} style={{ flex:1,padding:12,background:"#f3f4f6",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer" }}>ຍົກເລີກ</button>
-            <button onClick={() => onConfirm(selected)} style={{ flex:2,padding:12,background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມໃສ່ກະຕ່າ</button>
+            <button onClick={() => onConfirm(selected, sweetness)} style={{ flex:2,padding:12,background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມໃສ່ກະຕ່າ</button>
           </div>
         </div>
       </div>
@@ -325,6 +367,7 @@ function ReceiptModal({ order, shopInfo, onClose }) {
                 <div style={{ fontSize:11,color:"#888",display:"flex",justifyContent:"space-between" }}>
                   <span>{it.nameLao}</span><span>{it.qty} × {formatKip(lp)}</span>
                 </div>
+                {it.sweetness && <div style={{ fontSize:11,color:"#16a34a",paddingLeft:14 }}>{sweetLabel(it.sweetness)}</div>}
                 {(it.addons || []).map(a => (
                   <div key={a.id} style={{ fontSize:11,color:"#7c3aed",paddingLeft:14 }}>+ {a.nameLao} ({formatKip(a.price)})</div>
                 ))}
@@ -511,16 +554,16 @@ function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrIm
   const filtered = menu.filter(m => m.cat===cat && (search==="" || m.name.toLowerCase().includes(search.toLowerCase()) || m.nameLao.includes(search)));
 
   const onMenuClick = (item) => {
-    // If category supports add-ons → show modal
-    if (ADDON_CATEGORIES.includes(item.cat) && addons.length > 0) {
+    // All drinks → show modal (sweetness level, plus add-ons for coffee/matcha)
+    if (DRINK_CATEGORIES.includes(item.cat)) {
       setAddonItem(item);
     } else {
       addToCart(item, []);
     }
   };
 
-  const addToCart = (item, selectedAddons) => {
-    const newItem = { ...item, addons: selectedAddons };
+  const addToCart = (item, selectedAddons, sweetness) => {
+    const newItem = { ...item, addons: selectedAddons, ...(sweetness ? { sweetness } : {}) };
     const key = cartKey(newItem);
     setCart(prev => {
       const ex = prev.find(c => cartKey(c) === key);
@@ -704,9 +747,10 @@ function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrIm
                     </div>
                     <div style={{ fontSize:13,fontWeight:700,minWidth:65,textAlign:"right" }}>{formatKip(lp*item.qty)}</div>
                   </div>
-                  {(item.addons || []).length > 0 && (
+                  {(item.sweetness || (item.addons || []).length > 0) && (
                     <div style={{ paddingLeft:28,marginTop:2 }}>
-                      {item.addons.map(a => (
+                      {item.sweetness && <div style={{ fontSize:11,color:"#16a34a" }}>{sweetLabel(item.sweetness)}</div>}
+                      {(item.addons || []).map(a => (
                         <div key={a.id} style={{ fontSize:11,color:"#7c3aed" }}>+ {a.nameLao} <span style={{ color:"#9ca3af" }}>({formatKip(a.price)})</span></div>
                       ))}
                     </div>
@@ -808,9 +852,10 @@ function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrIm
                         </div>
                         <div style={{ fontSize:13,fontWeight:700,minWidth:65,textAlign:"right" }}>{formatKip(lp*item.qty)}</div>
                       </div>
-                      {(item.addons || []).length > 0 && (
+                      {(item.sweetness || (item.addons || []).length > 0) && (
                         <div style={{ paddingLeft:28,marginTop:2 }}>
-                          {item.addons.map(a => (
+                          {item.sweetness && <div style={{ fontSize:11,color:"#16a34a" }}>{sweetLabel(item.sweetness)}</div>}
+                          {(item.addons || []).map(a => (
                             <div key={a.id} style={{ fontSize:11,color:"#7c3aed" }}>+ {a.nameLao} <span style={{ color:"#9ca3af" }}>({formatKip(a.price)})</span></div>
                           ))}
                         </div>
@@ -919,7 +964,7 @@ function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrIm
         </div>
       )}
 
-      {addonItem && <AddonModal item={addonItem} addons={addons} onConfirm={(a) => { addToCart(addonItem, a); setAddonItem(null); }} onCancel={()=>setAddonItem(null)} />}
+      {addonItem && <AddonModal item={addonItem} addons={addons} onConfirm={(a, sw) => { addToCart(addonItem, a, sw); setAddonItem(null); }} onCancel={()=>setAddonItem(null)} />}
       {showParkModal && <ParkModal onConfirm={parkOrder} onCancel={()=>setShowParkModal(false)} />}
       {showQR && <QRModal amount={total} qrImage={qrImage} shopInfo={shopInfo} onConfirm={()=>finalize("qr")} onCancel={()=>setShowQR(false)} />}
       {receipt && <ReceiptModal order={receipt} shopInfo={shopInfo} onClose={()=>setReceipt(null)} />}
