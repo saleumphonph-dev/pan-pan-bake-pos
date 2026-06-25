@@ -1052,6 +1052,31 @@ function SyncBadge() {
   );
 }
 
+// Full-width warning bar shown whenever the cloud database is unreachable, so
+// staff notice immediately that sales are NOT syncing across devices.
+function OfflineBanner() {
+  const [status, setStatus] = useState("checking");
+  useEffect(() => {
+    checkConnection().then(setStatus);
+    const id = setInterval(() => checkConnection().then(setStatus), 15000);
+    return () => clearInterval(id);
+  }, []);
+  if (status === "online" || status === "checking") return null;
+  const isNoDb = status === "no-db";
+  return (
+    <div style={{
+      position:"sticky", top:0, zIndex:50,
+      width:"100%", background: isNoDb ? "#6b7280" : "#dc2626", color:"#fff",
+      fontFamily:"'Noto Sans Lao',sans-serif", fontSize:12, fontWeight:700,
+      textAlign:"center", padding:"6px 10px", lineHeight:1.4, flexShrink:0,
+    }}>
+      {isNoDb
+        ? "⚪ Local Only — ບໍ່ໄດ້ເຊື່ອມຕໍ່ Cloud (ບໍ່ sync ລະຫວ່າງເຄື່ອງ)"
+        : "🔴 Offline — ຍັງບໍ່ sync ຂຶ້ນ Cloud! ຂໍ້ມູນຍັງຢູ່ໃນເຄື່ອງນີ້ເທົ່ານັ້ນ / Sales are NOT syncing to other devices"}
+    </div>
+  );
+}
+
 // ── Dashboard ─────────────────────────────────────────────────
 function DashboardView({ sales }) {
   const [range, setRange] = useState("today");
@@ -2054,6 +2079,7 @@ export default function App() {
   // Shared view content — inlined JSX, not a component, so POSView's state is never lost
   const viewContent = (
     <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden" }}>
+      <OfflineBanner />
       {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
       {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
       {view==="dashboard"&&<DashboardView sales={sales} />}
@@ -2079,6 +2105,7 @@ export default function App() {
         </div>
       </div>
       <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden",paddingTop:"calc(44px + env(safe-area-inset-top, 0px))",paddingBottom:"calc(64px + env(safe-area-inset-bottom, 0px))" }}>
+        <OfflineBanner />
         {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
         {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
         {view==="dashboard"&&<DashboardView sales={sales} />}
