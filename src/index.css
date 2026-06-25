@@ -21,6 +21,12 @@
   --safe-padding-desktop: 24px;
 }
 
+html, body {
+  /* Disable Android Chrome pull-to-refresh (and bounce) so an accidental
+     overscroll while the staff scroll the menu never reloads the page. */
+  overscroll-behavior: none;
+}
+
 body {
   margin: 0;
   padding: 0;

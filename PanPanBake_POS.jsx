@@ -207,16 +207,49 @@ ${order.payment === "cash" && order.received ? `
 <div class="row" style="color:#16a34a"><span>ຮັບເງິນ</span><span>${formatKip(order.received)}</span></div>
 <div class="row" style="color:#7c3aed"><span>ເງິນທອນ</span><span>${formatKip(order.received - net)}</span></div>` : ""}
 <div class="footer">${shopInfo.footer}</div>
-<script>
-window.onload=function(){window.focus();window.print();};
-window.addEventListener('afterprint',function(){window.close();});
-</script>
 </body></html>`;
 
-  const w = window.open("", "_blank", "width=400,height=600");
-  if (!w) { alert("ກະລຸນາອະນຸຍາດ pop-up"); return; }
-  w.document.write(html);
-  w.document.close();
+  // Print via a hidden iframe instead of window.open(). Popup windows are blocked
+  // or fail to trigger the print dialog on Android tablets (Galaxy Tab) and iOS,
+  // whereas an in-page iframe prints reliably on tablet, phone, and desktop.
+  const existing = document.getElementById("ppb-print-frame");
+  if (existing) existing.remove();
+
+  const iframe = document.createElement("iframe");
+  iframe.id = "ppb-print-frame";
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
+  document.body.appendChild(iframe);
+
+  let done = false;
+  const cleanup = () => { const f = document.getElementById("ppb-print-frame"); if (f) f.remove(); };
+
+  const doPrint = () => {
+    if (done) return;
+    done = true;
+    try {
+      const win = iframe.contentWindow;
+      win.focus();
+      // afterprint fires whether the user prints, saves PDF, or cancels.
+      // Don't remove the iframe immediately — on Android the print framework may
+      // still be reading from it. Clean up shortly after afterprint, with a long
+      // fallback timer in case afterprint never fires.
+      win.addEventListener("afterprint", () => setTimeout(cleanup, 500));
+      win.print();
+      setTimeout(cleanup, 60000);
+    } catch (e) {
+      alert("ພິມບໍ່ໄດ້ / Print failed: " + e.message);
+      cleanup();
+    }
+  };
+
+  iframe.onload = () => setTimeout(doPrint, 250);
+
+  // Write content (srcdoc-style via document.write so onload fires consistently)
+  const doc = iframe.contentWindow.document;
+  doc.open();
+  doc.write(html);
+  doc.close();
 }
 
 // ============================================================
@@ -531,25 +564,33 @@ function ParkModal({ onConfirm, onCancel }) {
 // ============================================================
 function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrImage, shopInfo, parkedOrders, setParkedOrders, mode }) {
   const isMobile = mode === "phone";
+  // In-progress order ("order log") is persisted to localStorage so it survives
+  // switching to another tab/module and accidental page refreshes.
+  const draft = stor.get("orderDraft", {});
   const [cat, setCat] = useState(categories[0]?.id || "bakery");
-  const [cart, setCart] = useState([]);
+  const [cart, setCart] = useState(draft.cart || []);
   const [search, setSearch] = useState("");
   const [payment, setPayment] = useState("cash");
   const [received, setReceived] = useState("");
-  const [discount, setDiscount] = useState(0);
-  const [note, setNote] = useState("");
+  const [discount, setDiscount] = useState(draft.discount || 0);
+  const [note, setNote] = useState(draft.note || "");
   const [receipt, setReceipt] = useState(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const [showQR, setShowQR] = useState(false);
   const [focReason, setFocReason] = useState("");
   const [addonItem, setAddonItem] = useState(null);
-  const [parkedId, setParkedId] = useState(null); // resumed parked order id
-  const [parkedName, setParkedName] = useState("");
+  const [parkedId, setParkedId] = useState(draft.parkedId || null); // resumed parked order id
+  const [parkedName, setParkedName] = useState(draft.parkedName || "");
   const [showParkModal, setShowParkModal] = useState(false);
   const [showParkedList, setShowParkedList] = useState(false);
   const [showCartMobile, setShowCartMobile] = useState(false); // Mobile cart modal state
 
   useEffect(() => { if (!categories.find(c=>c.id===cat)) setCat(categories[0]?.id); }, [categories]);
+
+  // Persist the in-progress order so it isn't lost on tab switch or refresh.
+  useEffect(() => {
+    stor.set("orderDraft", { cart, discount, note, parkedId, parkedName });
+  }, [cart, discount, note, parkedId, parkedName]);
 
   const filtered = menu.filter(m => m.cat===cat && (search==="" || m.name.toLowerCase().includes(search.toLowerCase()) || m.nameLao.includes(search)));
 
@@ -1887,7 +1928,10 @@ const NAV=[
 const ROLES={ cashier:{label:"ພະນັກງານ",en:"Cashier",pin:"1234"}, manager:{label:"ຜູ້ຈັດການ",en:"Manager",pin:"5555"}, owner:{label:"ເຈົ້າຂອງ",en:"Owner",pin:"556559"} };
 
 export default function App() {
-  const [role,setRole]=useState(null);
+  // Restore the saved login session so a refresh / accidental reload does NOT
+  // log the user out. Stays logged in until they explicitly tap the 🔓 logout.
+  const savedRole = stor.get("session", null);
+  const [role,setRole]=useState(savedRole && ROLES[savedRole] ? savedRole : null);
   const [pin,setPin]=useState("");
   const [pinErr,setPinErr]=useState("");
   const [view,setView]=useState("pos");
@@ -1910,6 +1954,9 @@ export default function App() {
 
   // Auto-save parked
   useEffect(() => { stor.set("parked", parkedOrders); }, [parkedOrders]);
+
+  // Persist login session (null on logout) so reloads keep the user signed in.
+  useEffect(() => { stor.set("session", role); }, [role]);
 
   // Real-time cloud sync — polls Supabase every 10s, merges cloud data into local state.
   // Strategy: union by id; cloud wins for conflicting ids; local-only rows are preserved
