@@ -1676,7 +1676,7 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
 // ============================================================
 // ADMIN with Add-ons management
 // ============================================================
-function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons, qrImage, setQrImage, shopInfo, setShopInfo, role, onResetTestData }) {
+function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons, qrImage, setQrImage, shopInfo, setShopInfo, role, onResetTestData, onPushAll }) {
   const [tab,setTab]=useState("menu");
   const [editItem,setEditItem]=useState(null);
   const [filterCat,setFilterCat]=useState("all");
@@ -1751,9 +1751,12 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
 
       {tab==="menu"&&(
         <>
-          <div style={{ display:"flex",justifyContent:"space-between",marginBottom:12 }}>
+          <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,gap:8,flexWrap:"wrap" }}>
             <div style={{ fontSize:13,color:"#6b7280" }}>{menu.length} ລາຍການ</div>
-            <button onClick={()=>setShowAdd(!showAdd)} style={{ padding:"10px 18px",background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມ</button>
+            <div style={{ display:"flex",gap:8 }}>
+              <button onClick={()=>{ if(onPushAll && window.confirm("ສົ່ງເມນູ, ໝວດ, Add-ons ແລະ ຂໍ້ມູນຮ້ານ ປັດຈຸບັນ ໄປໃຫ້ທຸກອຸປະກອນ?\n\nPush current menu, categories, add-ons & shop info to ALL devices?")){ onPushAll(); alert("✅ ສົ່ງຂຶ້ນ Cloud ແລ້ວ.\nອຸປະກອນອື່ນຈະອັບເດດພາຍໃນ ~10 ວິນາທີ.\nPushed — other devices update within ~10s."); } }} style={{ padding:"10px 16px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }} title="ສົ່ງເມນູໄປໃຫ້ທຸກອຸປະກອນ">📤 ສົ່ງໄປທຸກເຄື່ອງ</button>
+              <button onClick={()=>setShowAdd(!showAdd)} style={{ padding:"10px 18px",background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມ</button>
+            </div>
           </div>
           {showAdd&&(
             <div style={{ background:"#fff",borderRadius:12,padding:18,border:"1px solid #e5e7eb",marginBottom:14 }}>
@@ -2188,6 +2191,14 @@ export default function App() {
   const setCategoriesSync = (v) => { setCategories(v); pushSetting("categories", v); };
   const setAddonsSync     = (v) => { setAddons(v);     pushSetting("addons", v); };
   const setShopInfoSync   = (v) => { setShopInfo(v);   pushSetting("shopInfo", v); };
+  // Manual "Push to all devices" — stamps the current menu/categories/add-ons/
+  // shop info as newest and uploads them, so every other device pulls this copy.
+  const pushAllSettings = () => {
+    pushSetting("menu", menu);
+    pushSetting("categories", categories);
+    pushSetting("addons", addons);
+    pushSetting("shopInfo", shopInfo);
+  };
 
   // Auto-save parked
   useEffect(() => { stor.set("parked", parkedOrders); }, [parkedOrders]);
@@ -2333,7 +2344,7 @@ export default function App() {
       {view==="dashboard"&&<DashboardView sales={sales} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
       {view==="accounting"&&<AccountingView sales={sales} />}
-      {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} />}
+      {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
     </div>
   );
 
@@ -2359,7 +2370,7 @@ export default function App() {
         {view==="dashboard"&&<DashboardView sales={sales} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
         {view==="accounting"&&<AccountingView sales={sales} />}
-        {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} />}
+        {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
       </div>
       <div style={{ position:"fixed",bottom:0,left:0,right:0,height:"calc(64px + env(safe-area-inset-bottom, 0px))",background:"#1a1a2e",display:"flex",alignItems:"flex-start",paddingBottom:"env(safe-area-inset-bottom, 0px)",zIndex:200,borderTop:"1px solid rgba(255,255,255,0.08)",boxSizing:"border-box" }}>
         {allowed.map(n=>(
