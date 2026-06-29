@@ -166,6 +166,9 @@ function receiptText(order, shopInfo) {
   const isFOC = order.payment === "foc";
   const payLabel = order.payment === "cash" ? "Cash" : order.payment === "qr" ? "QR" : order.payment === "transfer" ? "Transfer" : "FOC";
   const dbl = "=".repeat(cols);
+  // Direct-mode amounts use a plain ASCII "K" — the thermal printer's built-in
+  // font has no ₭ (U+20AD) glyph, so formatKip's symbol would print as garbage.
+  const kip = (n) => new Intl.NumberFormat("lo-LA").format(Math.round(n)) + " K";
   let t = "";
   // NOTE: shop name is intentionally NOT printed in RawBT direct mode (per shop
   // request — the printer can't render the Lao name anyway). Header is bill only.
@@ -176,30 +179,33 @@ function receiptText(order, shopInfo) {
   if (order.voidReason) t += center("*** VOID ***") + "\n";
   if (isFOC) t += center("*** FOC / FREE ***") + "\n";
   t += sep + "\n";
-  // Column header so unit price / qty / amount are easy to read
-  t += lr("Item            Unit x Qty", "Amount") + "\n";
+  // Header maps to the real layout: left = item/details, right = amount.
+  t += lr("Item", "Amount") + "\n";
   t += sep + "\n";
   order.items.forEach(it => {
     const up = itemPrice(it);
     t += `${it.name}`.slice(0, cols) + "\n";
     if (it.sweetness) { const s = SWEETNESS_LEVELS.find(x => x.id === it.sweetness); if (s) t += "  " + s.en + "\n"; }
-    (it.addons || []).forEach(a => { t += "  + " + a.name + " (" + formatKip(a.price) + ")\n"; });
-    t += lr(`  ${formatKip(up)} x ${it.qty}`, formatKip(up * it.qty)) + "\n";
+    (it.addons || []).forEach(a => { t += "  + " + a.name + " (" + kip(a.price) + ")\n"; });
+    t += lr(`  ${kip(up)} x ${it.qty}`, kip(up * it.qty)) + "\n";
   });
   t += sep + "\n";
-  t += lr("Subtotal", formatKip(order.total)) + "\n";
-  if (order.discount > 0) t += lr("Discount", "-" + formatKip(order.discount)) + "\n";
+  t += lr("Subtotal", kip(order.total)) + "\n";
+  if (order.discount > 0) t += lr("Discount", "-" + kip(order.discount)) + "\n";
   // TOTAL boxed in double lines so the customer can tell it apart from subtotal
   t += dbl + "\n";
-  t += lr("TOTAL", isFOC ? "FOC" : formatKip(net)) + "\n";
+  t += lr("TOTAL", isFOC ? "FOC" : kip(net)) + "\n";
   t += dbl + "\n";
   if (order.payment === "cash" && order.received) {
-    t += lr("Cash", formatKip(order.received)) + "\n";
-    t += lr("Change", formatKip(order.received - net)) + "\n";
+    t += lr("Cash", kip(order.received)) + "\n";
+    t += lr("Change", kip(order.received - net)) + "\n";
   }
+  // Remark prints as entered. NOTE: Lao text here will only render correctly in
+  // image/dialog print mode — the printer's text font has no Lao glyphs.
   if (order.note) { t += sep + "\n" + "Remark:\n" + order.note + "\n"; }
   t += sep + "\n";
-  if (shopInfo.footer) t += center(shopInfo.footer) + "\n";
+  // ASCII thank-you (the Lao footer can't render in direct text mode).
+  t += center("Thank you!") + "\n";
   t += "\n\n\n";
   return t;
 }
