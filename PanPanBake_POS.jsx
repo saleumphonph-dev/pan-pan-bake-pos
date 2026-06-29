@@ -2115,31 +2115,45 @@ export default function App() {
   // Persist login session (null on logout) so reloads keep the user signed in.
   useEffect(() => { stor.set("session", role); }, [role]);
 
-  // Real-time cloud sync — polls Supabase every 10s, merges cloud data into local state.
-  // Strategy: union by id; cloud wins for conflicting ids; local-only rows are preserved
-  // (e.g. an offline sale that hasn't synced up yet).
+  // Real-time cloud sync — polls Supabase every 10s. The cloud is authoritative:
+  //   • cloud rows win for matching ids,
+  //   • a local row that's NOT in the cloud is kept ONLY if it was created very
+  //     recently (likely an offline sale not yet uploaded) — and it's re-pushed
+  //     so it lands in the cloud,
+  //   • an OLD local row missing from the cloud is treated as deleted on the
+  //     server (e.g. Reset Test Data, or a void/removal on another device) and
+  //     is dropped — this is what makes deletions/resets propagate to every device.
+  // Reconciliation only runs on a SUCCESSFUL fetch, so a dropped connection
+  // (fetch returns null) never deletes anything.
   useEffect(() => {
     if (!role) return; // only when logged in
     let cancelled = false;
+    const RECENT_MS = 15 * 60 * 1000; // protect + re-upload local-only rows newer than this
+    const reconcile = (prev, cloud, tsField, repush) => {
+      const cloudMap = new Map(cloud.map(r => [r.id, r]));
+      const merged = new Map(cloudMap);
+      prev.forEach(r => {
+        if (!cloudMap.has(r.id)) {
+          const age = Date.now() - new Date(r[tsField]).getTime();
+          if (age >= 0 && age < RECENT_MS) { merged.set(r.id, r); repush(r); } // recent → keep & re-upload
+          // else: old local-only row → deleted on server → drop
+        }
+      });
+      return Array.from(merged.values());
+    };
     const sync = async () => {
       const [cs, cf] = await Promise.all([fetchSales(), fetchShifts()]);
       if (cancelled) return;
       if (cs) {
         setSales(prev => {
-          const m = new Map();
-          prev.forEach(o => m.set(o.id, o));
-          cs.forEach(o => m.set(o.id, o));
-          const next = Array.from(m.values());
+          const next = reconcile(prev, cs, "date", syncOrder);
           stor.set("sales", next);
           return next;
         });
       }
       if (cf) {
         setShifts(prev => {
-          const m = new Map();
-          prev.forEach(s => m.set(s.id, s));
-          cf.forEach(s => m.set(s.id, s));
-          const next = Array.from(m.values());
+          const next = reconcile(prev, cf, "openedAt", syncShift);
           stor.set("shifts", next);
           return next;
         });
@@ -2158,13 +2172,15 @@ export default function App() {
   const resetTestData=async()=>{
     const c1=window.prompt("⚠️ ນີ້ຈະລຶບ Sales, Shifts, ແລະ Expenses ທັງໝົດ (ທັງໃນເຄື່ອງ ແລະ ໃນ Cloud).\nMenu, settings, QR ຈະຍັງຄົງຢູ່.\n\nພິມ RESET ເພື່ອຢືນຢັນ:");
     if(c1!=="RESET")return;
-    setSales([]); stor.set("sales",[]);
-    setShifts([]); stor.set("shifts",[]);
-    setParkedOrders([]); stor.set("parked",[]);
-    stor.set("expenses",[]);
+    // Wipe the cloud FIRST. If it fails, abort and change nothing — otherwise a
+    // surviving cloud copy would just re-sync back down.
     const r=await wipeAllCloudData();
-    if(r.ok) alert("✅ ລ້າງຂໍ້ມູນທົດສອບສຳເລັດ\nTest data wiped (local + cloud).");
-    else alert("⚠️ ລຶບໃນເຄື່ອງສຳເລັດ ແຕ່ Cloud ບໍ່ສຳເລັດ: "+r.error+"\nLocal cleared; cloud wipe failed.");
+    if(!r.ok){ alert("⚠️ ລຶບ Cloud ບໍ່ສຳເລັດ: "+r.error+"\nບໍ່ໄດ້ລຶບຫຍັງ. ລອງໃໝ່ຕອນ online.\nCloud wipe failed — nothing was cleared."); return; }
+    // Cloud is empty. Clear all local POS data and reload so no in-flight poll or
+    // stale state can re-populate. Other devices drop their copies on next sync.
+    ["sales","shifts","parked","expenses"].forEach(k=>stor.set(k,[]));
+    alert("✅ ລ້າງຂໍ້ມູນທົດສອບສຳເລັດ (local + cloud).\nອຸປະກອນອື່ນຈະລ້າງເອງພາຍໃນ ~10 ວິນາທີ.\nກຳລັງໂຫຼດໃໝ່...");
+    window.location.reload();
   };
 
   const allowed=NAV.filter(n=>n.roles.includes(role||"cashier"));
