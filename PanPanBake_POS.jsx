@@ -147,7 +147,78 @@ const stor = {
 // ============================================================
 // PRINT RECEIPT
 // ============================================================
+// Printer configuration (saved in Admin → Printer). Defaults to 58mm thermal
+// via the Android print dialog, which the RawBT print service handles for
+// Bluetooth Xprinters while still rendering Lao text correctly (rasterized).
+const PRINTER_DEFAULT = { paperWidth: "58", mode: "dialog" };
+
+// Build a monospace plain-text receipt for RawBT "direct" mode (instant, no
+// dialog). Uses Latin labels because thermal printer fonts usually lack Lao
+// glyphs; item names are still printed as entered.
+function receiptText(order, shopInfo) {
+  const cfg = stor.get("printerConfig", PRINTER_DEFAULT);
+  const cols = cfg.paperWidth === "80" ? 42 : 32;
+  const sep = "-".repeat(cols);
+  const center = (s = "") => { s = String(s); if (s.length >= cols) return s.slice(0, cols); return " ".repeat(Math.floor((cols - s.length) / 2)) + s; };
+  const lr = (l = "", r = "") => { l = String(l); r = String(r); const sp = cols - l.length - r.length; return sp > 0 ? l + " ".repeat(sp) + r : (l + " " + r); };
+  const net = order.total - (order.discount || 0);
+  const isFOC = order.payment === "foc";
+  const payLabel = order.payment === "cash" ? "Cash" : order.payment === "qr" ? "QR" : order.payment === "transfer" ? "Transfer" : "FOC";
+  let t = "";
+  t += center(shopInfo.name.toUpperCase()) + "\n";
+  if (shopInfo.nameLao) t += center(shopInfo.nameLao) + "\n";
+  if (shopInfo.phone)   t += center(shopInfo.phone) + "\n";
+  t += sep + "\n";
+  t += "Bill #" + order.id.toUpperCase() + "\n";
+  t += fmtDT(order.date) + "\n";
+  if (order.cashier) t += "By: " + order.cashier + "\n";
+  t += "Pay: " + payLabel + "\n";
+  if (order.voidReason) t += center("*** VOID ***") + "\n";
+  if (isFOC) t += center("*** FOC / FREE ***") + "\n";
+  t += sep + "\n";
+  order.items.forEach(it => {
+    const lp = itemPrice(it);
+    t += lr(`${it.qty}x ${it.name}`.slice(0, cols - 9), formatKip(lp * it.qty)) + "\n";
+    if (it.sweetness) { const s = SWEETNESS_LEVELS.find(x => x.id === it.sweetness); if (s) t += "   " + s.en + "\n"; }
+    (it.addons || []).forEach(a => { t += "   + " + a.name + " (" + formatKip(a.price) + ")\n"; });
+  });
+  t += sep + "\n";
+  t += lr("Subtotal", formatKip(order.total)) + "\n";
+  if (order.discount > 0) t += lr("Discount", "-" + formatKip(order.discount)) + "\n";
+  t += lr("TOTAL", isFOC ? "FOC" : formatKip(net)) + "\n";
+  if (order.payment === "cash" && order.received) {
+    t += lr("Cash", formatKip(order.received)) + "\n";
+    t += lr("Change", formatKip(order.received - net)) + "\n";
+  }
+  t += sep + "\n";
+  if (shopInfo.footer) t += center(shopInfo.footer) + "\n";
+  t += "\n\n\n";
+  return t;
+}
+
 function printReceipt(order, shopInfo) {
+  const cfg = stor.get("printerConfig", PRINTER_DEFAULT);
+
+  // ── RawBT direct mode: send straight to the paired Bluetooth printer with no
+  // print dialog (fastest). Requires the free RawBT app installed on Android. ──
+  if (cfg.mode === "rawbt") {
+    const a = document.createElement("a");
+    a.href = "rawbt:" + encodeURIComponent(receiptText(order, shopInfo));
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 800);
+    return;
+  }
+
+  // ── Dialog / system print mode (default): renders the styled receipt and
+  // opens the Android print dialog. With RawBT set as the printer this prints
+  // to the Bluetooth Xprinter AND keeps Lao text (printed as a rasterized image). ──
+  const is80 = cfg.paperWidth === "80";
+  const W = is80 ? "80mm" : "58mm";
+  const F = is80
+    ? { base:12, shop:18, lao:11, meta:11, item:11, row:12, grand:16, foc:20, foot:10, pad:6 }
+    : { base:11, shop:15, lao:10, meta:10, item:10, row:11, grand:14, foc:17, foot:9,  pad:3 };
+
   const net = order.total - (order.discount || 0);
   const itemsHtml = order.items.map(it => {
     const addonText = (it.addons || []).map(a => `+ ${a.nameLao} (${formatKip(a.price)})`).join("<br>");
@@ -165,21 +236,22 @@ function printReceipt(order, shopInfo) {
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
+  @page{margin:0;size:${W} auto;}
   *{margin:0;padding:0;box-sizing:border-box;}
-  body{font-family:'Courier New',monospace;width:80mm;margin:0 auto;font-size:12px;padding:6px;}
+  body{font-family:'Courier New',monospace;width:${W};margin:0 auto;font-size:${F.base}px;padding:${F.pad}px;}
   .header{text-align:center;padding:8px 0;border-bottom:2px solid #000;}
-  .shop-name{font-size:18px;font-weight:900;letter-spacing:2px;}
-  .lao{font-size:11px;color:#555;}
-  .meta{padding:8px 0;border-bottom:1px dashed #aaa;font-size:11px;width:100%;}
+  .shop-name{font-size:${F.shop}px;font-weight:900;letter-spacing:1px;}
+  .lao{font-size:${F.lao}px;color:#555;}
+  .meta{padding:8px 0;border-bottom:1px dashed #aaa;font-size:${F.meta}px;width:100%;}
   .meta td:first-child{color:#888;width:40%;}
   .meta td:last-child{font-weight:600;}
   .items{width:100%;border-collapse:collapse;padding:8px 0;}
-  .items td{font-size:11px;vertical-align:top;}
+  .items td{font-size:${F.item}px;vertical-align:top;}
   .divider{border-top:1px dashed #aaa;margin:6px 0;}
-  .row{display:flex;justify-content:space-between;margin:2px 0;font-size:12px;}
-  .grand{font-size:16px;font-weight:900;border-top:2px solid #000;padding-top:6px;margin-top:4px;}
-  .footer{text-align:center;font-size:10px;color:#888;padding:8px 0;border-top:1px dashed #aaa;margin-top:4px;}
-  ${isFOC ? ".foc{text-align:center;font-size:20px;font-weight:900;color:#16a34a;border:2px solid #16a34a;padding:6px;margin:6px 0;}" : ""}
+  .row{display:flex;justify-content:space-between;margin:2px 0;font-size:${F.row}px;}
+  .grand{font-size:${F.grand}px;font-weight:900;border-top:2px solid #000;padding-top:6px;margin-top:4px;}
+  .footer{text-align:center;font-size:${F.foot}px;color:#888;padding:8px 0;border-top:1px dashed #aaa;margin-top:4px;}
+  ${isFOC ? `.foc{text-align:center;font-size:${F.foc}px;font-weight:900;color:#16a34a;border:2px solid #16a34a;padding:6px;margin:6px 0;}` : ""}
 </style></head><body>
 <div class="header">
   <div class="shop-name">${shopInfo.name.toUpperCase()}</div>
@@ -1572,7 +1644,17 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
   const [showAddAddon,setShowAddAddon]=useState(false);
   const [addonForm,setAddonForm]=useState({name:"",nameLao:"",price:"",group:"milk"});
   const [shopForm,setShopForm]=useState(shopInfo);
+  const [printerCfg,setPrinterCfg]=useState(()=>stor.get("printerConfig",PRINTER_DEFAULT));
   const fileRef=useRef(null); const editFileRef=useRef(null); const qrRef=useRef(null);
+
+  const savePrinter=(patch)=>{ const next={...stor.get("printerConfig",PRINTER_DEFAULT),...patch}; setPrinterCfg(next); stor.set("printerConfig",next); };
+  const testPrint=()=>{
+    printReceipt({
+      id:"test01", date:new Date().toISOString(), cashier:ROLES[role]?.label||"—",
+      payment:"cash", received:50000, discount:0, total:30000,
+      items:[{emoji:"🥐",name:"Croissant",nameLao:"ຄວາຊ໊ອງ",price:15000,qty:2,addons:[]}],
+    }, shopInfo);
+  };
 
   const handleImg=(e,target)=>{
     const f=e.target.files?.[0]; if(!f)return;
@@ -1617,7 +1699,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
       <h1 style={{ margin:"0 0 4px",fontSize:22,fontWeight:700 }}>⚙️ ຈັດການລະບົບ</h1>
       <div style={{ fontSize:13,color:"#6b7280",marginBottom:16 }}>Admin Settings</div>
       <div style={{ display:"flex",gap:4,marginBottom:16,background:"#fff",padding:4,borderRadius:10,width:"fit-content",flexWrap:"wrap" }}>
-        {[["menu","🍞 ເມນູ"],["categories","📂 ໝວດ"],["addons","✨ Add-ons"],["settings","🏪 ຮ້ານ"],["qr","📲 QR"]].map(([v,l])=>(
+        {[["menu","🍞 ເມນູ"],["categories","📂 ໝວດ"],["addons","✨ Add-ons"],["settings","🏪 ຮ້ານ"],["qr","📲 QR"],["printer","🖨️ ເຄື່ອງພິມ"]].map(([v,l])=>(
           <button key={v} onClick={()=>setTab(v)} style={{ padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",background:tab===v?"#1a1a2e":"transparent",color:tab===v?"#f4d03f":"#374151",fontWeight:tab===v?700:500,fontSize:13 }}>{l}</button>
         ))}
       </div>
@@ -1859,6 +1941,56 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {tab==="printer"&&(
+        <div style={{ background:"#fff",borderRadius:12,padding:20,border:"1px solid #e5e7eb" }}>
+          <div style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>🖨️ ຕັ້ງຄ່າເຄື່ອງພິມ</div>
+          <div style={{ fontSize:13,color:"#6b7280",marginBottom:18 }}>Printer Settings — Xprinter ຜ່ານ Bluetooth</div>
+
+          {/* Paper width */}
+          <div style={{ fontSize:13,fontWeight:600,marginBottom:8 }}>📏 ຄວາມກວ້າງເຈ້ຍ / Paper width</div>
+          <div style={{ display:"flex",gap:10,marginBottom:20 }}>
+            {[["58","58mm (ນ້ອຍ / Bluetooth)"],["80","80mm (ໃຫຍ່ / Desktop)"]].map(([v,l])=>(
+              <button key={v} onClick={()=>savePrinter({paperWidth:v})} style={{ flex:1,padding:"12px 10px",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:600,border:printerCfg.paperWidth===v?"2px solid #7c3aed":"1px solid #e5e7eb",background:printerCfg.paperWidth===v?"#7c3aed":"#fff",color:printerCfg.paperWidth===v?"#fff":"#374151" }}>{printerCfg.paperWidth===v?"✓ ":""}{l}</button>
+            ))}
+          </div>
+
+          {/* Print mode */}
+          <div style={{ fontSize:13,fontWeight:600,marginBottom:8 }}>⚙️ ວິທີພິມ / Print method</div>
+          <div style={{ display:"flex",flexDirection:"column",gap:8,marginBottom:20 }}>
+            {[
+              ["dialog","📄 Android Print (RawBT)","ແນະນຳ · ຮອງຮັບພາສາລາວ · ມີໜ້າຈໍເລືອກ — Recommended, supports Lao"],
+              ["rawbt","⚡ RawBT ໂດຍກົງ / Direct","ໄວ ບໍ່ມີໜ້າຈໍ · ຕົວອັກສອນລາຕິນ/ໂຕເລກ — Instant, no dialog, Latin/numbers"],
+            ].map(([v,title,desc])=>(
+              <button key={v} onClick={()=>savePrinter({mode:v})} style={{ textAlign:"left",padding:"12px 14px",borderRadius:10,cursor:"pointer",border:printerCfg.mode===v?"2px solid #16a34a":"1px solid #e5e7eb",background:printerCfg.mode===v?"#f0fdf4":"#fff" }}>
+                <div style={{ fontSize:13,fontWeight:700,color:printerCfg.mode===v?"#16a34a":"#374151" }}>{printerCfg.mode===v?"✓ ":""}{title}</div>
+                <div style={{ fontSize:11,color:"#6b7280",marginTop:2 }}>{desc}</div>
+              </button>
+            ))}
+          </div>
+
+          {/* Test print */}
+          <button onClick={testPrint} style={{ width:"100%",padding:14,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:20 }}>
+            🧾 ທົດສອບພິມ / Test Print
+          </button>
+
+          {/* Setup guide */}
+          <div style={{ background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:14 }}>
+            <div style={{ fontSize:13,fontWeight:700,color:"#1d4ed8",marginBottom:8 }}>📲 ການຕັ້ງຄ່າຄັ້ງທຳອິດ / One-time setup on the tablet</div>
+            <ol style={{ margin:0,paddingLeft:18,fontSize:12,color:"#374151",lineHeight:1.9 }}>
+              <li>ຕິດຕັ້ງແອັບ <b>RawBT</b> ຈາກ Google Play / Install <b>RawBT</b> from Google Play.</li>
+              <li>ເປີດ Bluetooth ຂອງແທັບເລັດ ແລະ <b>ຈັບຄູ່ (pair)</b> ກັບ Xprinter / Pair the Xprinter in Android Bluetooth settings.</li>
+              <li>ເປີດ RawBT → ເລືອກ Xprinter ເປັນເຄື່ອງພິມ / Open RawBT → select the Xprinter as its printer.</li>
+              <li>ກັບມາທີ່ນີ້ ກົດ <b>ທົດສອບພິມ</b> / Come back here and tap <b>Test Print</b>.</li>
+              <li>ຖ້າໃຊ້ "Android Print": ໃນໜ້າຈໍພິມ ເລືອກ <b>RawBT</b> ເປັນປາຍທາງ / In the print dialog pick <b>RawBT</b> as the destination.</li>
+            </ol>
+            <div style={{ fontSize:11,color:"#6b7280",marginTop:10,lineHeight:1.6 }}>
+              ℹ️ ເບຣົາເຊີບໍ່ສາມາດຕໍ່ Bluetooth ໂດຍກົງ — RawBT ເປັນຕົວເຊື່ອມລະຫວ່າງແອັບ ກັບ Xprinter.<br/>
+              A browser can't reach Bluetooth directly; RawBT bridges the app to your Xprinter.
+            </div>
+          </div>
         </div>
       )}
     </div>
