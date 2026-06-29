@@ -190,6 +190,7 @@ function receiptText(order, shopInfo) {
     t += lr("Cash", formatKip(order.received)) + "\n";
     t += lr("Change", formatKip(order.received - net)) + "\n";
   }
+  if (order.note) { t += sep + "\n" + "ໝາຍເຫດ / Remark:\n" + order.note + "\n"; }
   t += sep + "\n";
   if (shopInfo.footer) t += center(shopInfo.footer) + "\n";
   t += "\n\n\n";
@@ -235,6 +236,12 @@ function printReceipt(order, shopInfo) {
 
   const payLabel = order.payment === "cash" ? "ເງິນສົດ" : order.payment === "qr" ? "QR Code" : order.payment === "transfer" ? "ໂອນ" : "FOC";
   const isFOC = order.payment === "foc";
+  const esc = (s) => String(s).replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c]));
+  // Remark / customer details — printed as a dedicated full-width block that
+  // preserves line breaks (good for customer name, phone, address).
+  const remarkHtml = order.note
+    ? `<div class="remark"><div class="remark-h">ໝາຍເຫດ / Remark</div><div class="remark-b">${esc(order.note)}</div></div><div class="divider"></div>`
+    : "";
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
@@ -251,28 +258,30 @@ function printReceipt(order, shopInfo) {
   .items{width:100%;border-collapse:collapse;padding:8px 0;}
   .items td{font-size:${F.item}px;vertical-align:top;}
   .divider{border-top:1px dashed #000;margin:6px 0;}
+  .remark{padding:4px 0;font-size:${F.meta}px;}
+  .remark-h{font-weight:normal;font-size:${F.lao}px;}
+  .remark-b{font-weight:bold;white-space:pre-wrap;word-break:break-word;}
   .row{display:flex;justify-content:space-between;margin:3px 0;font-size:${F.row}px;}
   .grand{font-size:${F.grand}px;font-weight:900;border-top:2px solid #000;padding-top:6px;margin-top:4px;}
   .footer{text-align:center;font-size:${F.foot}px;font-weight:normal;padding:8px 0;border-top:1px dashed #000;margin-top:4px;}
   ${isFOC ? `.foc{text-align:center;font-size:${F.foc}px;font-weight:900;border:2px solid #000;padding:6px;margin:6px 0;}` : ""}
 </style></head><body>
 <div class="header">
-  <div class="shop-name">${shopInfo.name.toUpperCase()}</div>
-  <div class="lao">${shopInfo.nameLao}</div>
-  <div class="lao">${shopInfo.addressEn}</div>
-  <div class="lao">${shopInfo.address}</div>
-  <div class="lao">${shopInfo.phone}</div>
+  <div class="shop-name">${esc(shopInfo.name.toUpperCase())}</div>
+  <div class="lao">${esc(shopInfo.nameLao)}</div>
+  <div class="lao">${esc(shopInfo.addressEn)}</div>
+  <div class="lao">${esc(shopInfo.address)}</div>
+  <div class="lao">${esc(shopInfo.phone)}</div>
 </div>
 ${isFOC ? '<div class="foc">★ FOC / ຟຣີ ★</div>' : ""}
 <table class="meta">
   <tr><td>ໃບບິນ #</td><td>${order.id.toUpperCase()}</td></tr>
   <tr><td>ວັນທີ</td><td>${fmtDT(order.date)}</td></tr>
-  <tr><td>ພະນັກງານ</td><td>${order.cashier || "—"}</td></tr>
+  <tr><td>ພະນັກງານ</td><td>${esc(order.cashier || "—")}</td></tr>
   <tr><td>ຈ່າຍ</td><td>${payLabel}</td></tr>
-  ${order.note ? `<tr><td>ໝາຍເຫດ</td><td>${order.note}</td></tr>` : ""}
-  ${order.voidReason ? `<tr><td>★ ຍົກເລີກ</td><td>${order.voidReason}</td></tr>` : ""}
+  ${order.voidReason ? `<tr><td>★ ຍົກເລີກ</td><td>${esc(order.voidReason)}</td></tr>` : ""}
 </table>
-<div class="divider"></div>
+${remarkHtml}
 <table class="items">${itemsHtml}</table>
 <div class="divider"></div>
 <div class="row"><span>ລວມ (${order.items.reduce((s,i)=>s+i.qty,0)} ລາຍການ)</span><span>${formatKip(order.total)}</span></div>
@@ -440,10 +449,16 @@ function AddonModal({ item, addons, onConfirm, onCancel }) {
 // ============================================================
 // RECEIPT MODAL
 // ============================================================
-function ReceiptModal({ order, shopInfo, onClose }) {
+function ReceiptModal({ order, shopInfo, onClose, onSaveRemark }) {
   const net = order.total - (order.discount || 0);
   const isFOC = order.payment === "foc";
   const payLabel = order.payment === "cash" ? "💵 ເງິນສົດ" : order.payment === "qr" ? "📲 QR" : order.payment === "transfer" ? "🏦 ໂອນ" : "🎁 FOC";
+  const [remark, setRemark] = useState(order.note || "");
+  const doPrint = () => {
+    const o = { ...order, note: remark.trim() };
+    if (onSaveRemark && remark.trim() !== (order.note || "")) onSaveRemark(o); // persist + sync the edit
+    printReceipt(o, shopInfo);
+  };
 
   return (
     <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999 }}>
@@ -500,8 +515,12 @@ function ReceiptModal({ order, shopInfo, onClose }) {
           )}
         </div>
         <div style={{ padding:"8px 18px 14px",textAlign:"center",fontSize:11,color:"#888",background:"#f9f6f0",borderTop:"1px dashed #ddd" }}>{shopInfo.footer}</div>
-        <div style={{ display:"flex",gap:8,padding:"0 16px 16px",background:"#f9f6f0",borderRadius:"0 0 12px 12px" }}>
-          <button onClick={()=>printReceipt(order,shopInfo)} style={{ flex:1,padding:10,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:600,cursor:"pointer",fontSize:14 }}>🖨️ ພິມ</button>
+        <div style={{ padding:"10px 16px 4px",background:"#f9f6f0",fontFamily:"'Noto Sans Lao',sans-serif" }}>
+          <div style={{ fontSize:12,fontWeight:700,color:"#374151",marginBottom:5 }}>📝 ໝາຍເຫດ / Remark <span style={{ fontWeight:400,color:"#9ca3af" }}>(ຊື່ລູກຄ້າ, ເບີໂທ, ທີ່ຢູ່)</span></div>
+          <textarea value={remark} onChange={e=>setRemark(e.target.value)} rows={3} placeholder={"ຊື່ລູກຄ້າ / Name\nເບີໂທ / Phone\nທີ່ຢູ່ / Address"} style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #d1d5db",fontSize:13,boxSizing:"border-box",resize:"vertical",fontFamily:"'Noto Sans Lao',sans-serif" }} />
+        </div>
+        <div style={{ display:"flex",gap:8,padding:"6px 16px 16px",background:"#f9f6f0",borderRadius:"0 0 12px 12px" }}>
+          <button onClick={doPrint} style={{ flex:1,padding:10,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:600,cursor:"pointer",fontSize:14 }}>🖨️ ພິມ</button>
           <button onClick={onClose} style={{ flex:1,padding:10,background:"#e5e7eb",color:"#374151",border:"none",borderRadius:8,fontWeight:600,cursor:"pointer",fontSize:14 }}>✕ ປິດ</button>
         </div>
       </div>
@@ -637,7 +656,7 @@ function ParkModal({ onConfirm, onCancel }) {
 // ============================================================
 // POS VIEW with parked orders & add-ons
 // ============================================================
-function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrImage, shopInfo, parkedOrders, setParkedOrders, mode }) {
+function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift, cashier, qrImage, shopInfo, parkedOrders, setParkedOrders, mode }) {
   const isMobile = mode === "phone";
   // In-progress order ("order log") is persisted to localStorage so it survives
   // switching to another tab/module and accidental page refreshes.
@@ -1083,7 +1102,7 @@ function POSView({ menu, categories, addons, onSale, currentShift, cashier, qrIm
       {addonItem && <AddonModal item={addonItem} addons={addons} onConfirm={(a, sw) => { addToCart(addonItem, a, sw); setAddonItem(null); }} onCancel={()=>setAddonItem(null)} />}
       {showParkModal && <ParkModal onConfirm={parkOrder} onCancel={()=>setShowParkModal(false)} />}
       {showQR && <QRModal amount={total} qrImage={qrImage} shopInfo={shopInfo} onConfirm={()=>finalize("qr")} onCancel={()=>setShowQR(false)} />}
-      {receipt && <ReceiptModal order={receipt} shopInfo={shopInfo} onClose={()=>setReceipt(null)} />}
+      {receipt && <ReceiptModal order={receipt} shopInfo={shopInfo} onClose={()=>setReceipt(null)} onSaveRemark={(o)=>{ setReceipt(o); onUpdateSale && onUpdateSale(o); }} />}
     </div>
   );
 }
@@ -2169,6 +2188,7 @@ export default function App() {
 
   const handlePin=(r)=>{ if(pin===ROLES[r].pin){setRole(r);setPin("");setPinErr("");}else setPinErr("PIN ບໍ່ຖືກຕ້ອງ"); };
   const addSale=(o)=>{ const u=[...sales,o];setSales(u);stor.set("sales",u);syncOrder(o); };
+  const updateSale=(o)=>{ const u=sales.map(s=>s.id===o.id?o:s);setSales(u);stor.set("sales",u);syncOrder(o); };
   const openShift=({cash,notes})=>{ const s={id:genId(),openedAt:new Date().toISOString(),openingCash:cash,cashier:ROLES[role].label,notes};const u=[...shifts,s];setShifts(u);stor.set("shifts",u);syncShift(s);setShiftModal(null); };
   const closeShift=({cash,notes,expected})=>{ const u=shifts.map(s=>s.id===currentShift.id?{...s,closedAt:new Date().toISOString(),closingCash:cash,expectedCash:expected,variance:cash-expected,notes:(s.notes?s.notes+" | ":"")+(notes||"")}:s);setShifts(u);stor.set("shifts",u);syncShift(u.find(s=>s.id===currentShift.id));setShiftModal(null); };
 
@@ -2231,7 +2251,7 @@ export default function App() {
   const viewContent = (
     <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden" }}>
       <OfflineBanner />
-      {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
+      {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
       {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
       {view==="dashboard"&&<DashboardView sales={sales} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
@@ -2257,7 +2277,7 @@ export default function App() {
       </div>
       <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden",paddingTop:"calc(44px + env(safe-area-inset-top, 0px))",paddingBottom:"calc(64px + env(safe-area-inset-bottom, 0px))" }}>
         <OfflineBanner />
-        {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
+        {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
         {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
         {view==="dashboard"&&<DashboardView sales={sales} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
