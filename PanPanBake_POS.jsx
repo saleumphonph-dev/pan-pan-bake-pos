@@ -150,7 +150,7 @@ const stor = {
 // Printer configuration (saved in Admin → Printer). Defaults to 58mm thermal
 // via the Android print dialog, which the RawBT print service handles for
 // Bluetooth Xprinters while still rendering Lao text correctly (rasterized).
-const PRINTER_DEFAULT = { paperWidth: "58", mode: "dialog" };
+const PRINTER_DEFAULT = { paperWidth: "80", mode: "dialog" };
 
 // Build a monospace plain-text receipt for RawBT "direct" mode (instant, no
 // dialog). Uses Latin labels because thermal printer fonts usually lack Lao
@@ -1952,7 +1952,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
           {/* Paper width */}
           <div style={{ fontSize:13,fontWeight:600,marginBottom:8 }}>📏 ຄວາມກວ້າງເຈ້ຍ / Paper width</div>
           <div style={{ display:"flex",gap:10,marginBottom:20 }}>
-            {[["58","58mm (ນ້ອຍ / Bluetooth)"],["80","80mm (ໃຫຍ່ / Desktop)"]].map(([v,l])=>(
+            {[["58","58mm (ນ້ອຍ / small)"],["80","80mm (ມາດຕະຖານ / standard)"]].map(([v,l])=>(
               <button key={v} onClick={()=>savePrinter({paperWidth:v})} style={{ flex:1,padding:"12px 10px",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:600,border:printerCfg.paperWidth===v?"2px solid #7c3aed":"1px solid #e5e7eb",background:printerCfg.paperWidth===v?"#7c3aed":"#fff",color:printerCfg.paperWidth===v?"#fff":"#374151" }}>{printerCfg.paperWidth===v?"✓ ":""}{l}</button>
             ))}
           </div>
