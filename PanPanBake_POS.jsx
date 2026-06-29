@@ -166,9 +166,9 @@ function receiptText(order, shopInfo) {
   const isFOC = order.payment === "foc";
   const payLabel = order.payment === "cash" ? "Cash" : order.payment === "qr" ? "QR" : order.payment === "transfer" ? "Transfer" : "FOC";
   const dbl = "=".repeat(cols);
-  // Direct-mode amounts use a plain ASCII "K" — the thermal printer's built-in
+  // Direct-mode amounts use a plain ASCII "LAK" — the thermal printer's built-in
   // font has no ₭ (U+20AD) glyph, so formatKip's symbol would print as garbage.
-  const kip = (n) => new Intl.NumberFormat("lo-LA").format(Math.round(n)) + " K";
+  const kip = (n) => new Intl.NumberFormat("lo-LA").format(Math.round(n)) + " LAK";
   let t = "";
   // NOTE: shop name is intentionally NOT printed in RawBT direct mode (per shop
   // request — the printer can't render the Lao name anyway). Header is bill only.
