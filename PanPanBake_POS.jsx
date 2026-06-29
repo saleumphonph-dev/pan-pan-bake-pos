@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fetchShifts } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fetchShifts, fetchSettings, syncSetting } from "./src/lib/supabase.js";
 
 // ============================================================
 // CONSTANTS
@@ -11,6 +11,7 @@ const DEFAULT_SHOP_INFO = {
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
   city: "ນະຄອນຫຼວງວຽງຈັນ, ລາວ", phone: "020 XXXX XXXX",
   footer: "ຂອບໃຈທີ່ໃຊ້ບໍລິການ! • Thank you!",
+  logo: "", // base64 data URL — printed at the top of the receipt (image/dialog mode)
   qrBank: "BCEL One", qrAccount: "PAN PAN BAKE", qrNumber: "010-12-XX-XXXXXXX-001",
 };
 
@@ -164,11 +165,10 @@ function receiptText(order, shopInfo) {
   const net = order.total - (order.discount || 0);
   const isFOC = order.payment === "foc";
   const payLabel = order.payment === "cash" ? "Cash" : order.payment === "qr" ? "QR" : order.payment === "transfer" ? "Transfer" : "FOC";
+  const dbl = "=".repeat(cols);
   let t = "";
-  t += center(shopInfo.name.toUpperCase()) + "\n";
-  if (shopInfo.nameLao) t += center(shopInfo.nameLao) + "\n";
-  if (shopInfo.phone)   t += center(shopInfo.phone) + "\n";
-  t += sep + "\n";
+  // NOTE: shop name is intentionally NOT printed in RawBT direct mode (per shop
+  // request — the printer can't render the Lao name anyway). Header is bill only.
   t += "Bill #" + order.id.toUpperCase() + "\n";
   t += fmtDT(order.date) + "\n";
   if (order.cashier) t += "By: " + order.cashier + "\n";
@@ -176,21 +176,28 @@ function receiptText(order, shopInfo) {
   if (order.voidReason) t += center("*** VOID ***") + "\n";
   if (isFOC) t += center("*** FOC / FREE ***") + "\n";
   t += sep + "\n";
+  // Column header so unit price / qty / amount are easy to read
+  t += lr("Item            Unit x Qty", "Amount") + "\n";
+  t += sep + "\n";
   order.items.forEach(it => {
-    const lp = itemPrice(it);
-    t += lr(`${it.qty}x ${it.name}`.slice(0, cols - 9), formatKip(lp * it.qty)) + "\n";
-    if (it.sweetness) { const s = SWEETNESS_LEVELS.find(x => x.id === it.sweetness); if (s) t += "   " + s.en + "\n"; }
-    (it.addons || []).forEach(a => { t += "   + " + a.name + " (" + formatKip(a.price) + ")\n"; });
+    const up = itemPrice(it);
+    t += `${it.name}`.slice(0, cols) + "\n";
+    if (it.sweetness) { const s = SWEETNESS_LEVELS.find(x => x.id === it.sweetness); if (s) t += "  " + s.en + "\n"; }
+    (it.addons || []).forEach(a => { t += "  + " + a.name + " (" + formatKip(a.price) + ")\n"; });
+    t += lr(`  ${formatKip(up)} x ${it.qty}`, formatKip(up * it.qty)) + "\n";
   });
   t += sep + "\n";
   t += lr("Subtotal", formatKip(order.total)) + "\n";
   if (order.discount > 0) t += lr("Discount", "-" + formatKip(order.discount)) + "\n";
+  // TOTAL boxed in double lines so the customer can tell it apart from subtotal
+  t += dbl + "\n";
   t += lr("TOTAL", isFOC ? "FOC" : formatKip(net)) + "\n";
+  t += dbl + "\n";
   if (order.payment === "cash" && order.received) {
     t += lr("Cash", formatKip(order.received)) + "\n";
     t += lr("Change", formatKip(order.received - net)) + "\n";
   }
-  if (order.note) { t += sep + "\n" + "ໝາຍເຫດ / Remark:\n" + order.note + "\n"; }
+  if (order.note) { t += sep + "\n" + "Remark:\n" + order.note + "\n"; }
   t += sep + "\n";
   if (shopInfo.footer) t += center(shopInfo.footer) + "\n";
   t += "\n\n\n";
@@ -219,28 +226,38 @@ function printReceipt(order, shopInfo) {
   // Larger fonts + pure black + full width = crisp, dark thermal output that
   // fills the paper. No emoji/gray (thermal printers render those as garbage/faded).
   const F = is80
-    ? { base:14, shop:27, lao:13, meta:14, item:14, row:15, grand:21, foc:24, foot:13, pad:6 }
-    : { base:12, shop:19, lao:11, meta:12, item:12, row:13, grand:17, foc:19, foot:11, pad:4 };
+    ? { base:16, shop:31, lao:15, meta:16, item:16, row:18, grand:27, foc:27, foot:14, pad:6, logo:150 }
+    : { base:13, shop:21, lao:12, meta:13, item:13, row:14, grand:20, foc:20, foot:12, pad:4, logo:110 };
 
   const net = order.total - (order.discount || 0);
   const itemsHtml = order.items.map(it => {
     const addonText = (it.addons || []).map(a => `+ ${a.nameLao} (${formatKip(a.price)})`).join("<br>");
     const sweetText = it.sweetness ? sweetLabel(it.sweetness).replace(/^[^\s]+\s/, "") : ""; // drop leading emoji
-    const linePrice = itemPrice(it);
+    const unit = itemPrice(it);
     return `<tr>
-      <td style="padding:3px 0">${it.name}<br><small>${it.nameLao}</small>${sweetText ? `<br><small>${sweetText}</small>` : ""}${addonText ? `<br><small>${addonText}</small>` : ""}</td>
-      <td style="text-align:right;padding:3px 0;white-space:nowrap">${it.qty}×${formatKip(linePrice)}</td>
-      <td style="text-align:right;padding:3px 0;font-weight:bold;white-space:nowrap">${formatKip(linePrice * it.qty)}</td>
+      <td style="padding:4px 0">${it.name}<br><small>${it.nameLao}</small>${sweetText ? `<br><small>${sweetText}</small>` : ""}${addonText ? `<br><small>${addonText}</small>` : ""}</td>
+      <td style="text-align:center;padding:4px 0;white-space:nowrap">${formatKip(unit)}<br><small>× ${it.qty}</small></td>
+      <td style="text-align:right;padding:4px 0;font-weight:bold;white-space:nowrap">${formatKip(unit * it.qty)}</td>
     </tr>`;
   }).join("");
+  // Column header so the unit price, quantity and amount are clearly labelled.
+  const itemsHeader = `<tr class="ihead">
+      <td style="padding:2px 0">ລາຍການ<br><small>Item</small></td>
+      <td style="text-align:center;padding:2px 0">ລາຄາ/ໜ່ວຍ<br><small>Unit × Qty</small></td>
+      <td style="text-align:right;padding:2px 0">ລວມ<br><small>Amount</small></td>
+    </tr>`;
 
   const payLabel = order.payment === "cash" ? "ເງິນສົດ" : order.payment === "qr" ? "QR Code" : order.payment === "transfer" ? "ໂອນ" : "FOC";
   const isFOC = order.payment === "foc";
   const esc = (s) => String(s).replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c]));
-  // Remark / customer details — printed as a dedicated full-width block that
-  // preserves line breaks (good for customer name, phone, address).
+  // Remark / customer details — printed as a prominent boxed block (so the rider
+  // can read the customer name, phone and address at a glance). Preserves line breaks.
   const remarkHtml = order.note
-    ? `<div class="remark"><div class="remark-h">ໝາຍເຫດ / Remark</div><div class="remark-b">${esc(order.note)}</div></div><div class="divider"></div>`
+    ? `<div class="remark"><div class="remark-h">📋 ໝາຍເຫດ / ລູກຄ້າ · Customer</div><div class="remark-b">${esc(order.note)}</div></div>`
+    : "";
+  // Optional shop logo, printed centered at the top (image/dialog mode only).
+  const logoHtml = shopInfo.logo
+    ? `<div class="logo"><img src="${shopInfo.logo}" alt=""></div>`
     : "";
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -249,6 +266,8 @@ function printReceipt(order, shopInfo) {
   *{margin:0;padding:0;box-sizing:border-box;color:#000;}
   body{font-family:'Courier New',monospace;width:100%;font-weight:bold;font-size:${F.base}px;padding:${F.pad}px;color:#000;}
   small{font-size:${F.lao}px;font-weight:normal;}
+  .logo{text-align:center;padding:4px 0 2px;}
+  .logo img{max-width:${F.logo}px;max-height:${F.logo}px;width:auto;height:auto;filter:grayscale(1) contrast(2);}
   .header{text-align:center;padding:6px 0 8px;border-bottom:2px solid #000;}
   .shop-name{font-size:${F.shop}px;font-weight:900;letter-spacing:1px;}
   .lao{font-size:${F.lao}px;font-weight:normal;}
@@ -257,15 +276,19 @@ function printReceipt(order, shopInfo) {
   .meta td:last-child{font-weight:bold;text-align:right;}
   .items{width:100%;border-collapse:collapse;padding:8px 0;}
   .items td{font-size:${F.item}px;vertical-align:top;}
+  .items tr.ihead td{font-weight:bold;border-bottom:1px solid #000;padding-bottom:3px;}
   .divider{border-top:1px dashed #000;margin:6px 0;}
-  .remark{padding:4px 0;font-size:${F.meta}px;}
-  .remark-h{font-weight:normal;font-size:${F.lao}px;}
-  .remark-b{font-weight:bold;white-space:pre-wrap;word-break:break-word;}
+  .remark{padding:8px 10px;margin:6px 0;border:2px solid #000;}
+  .remark-h{font-weight:bold;font-size:${F.meta}px;margin-bottom:4px;}
+  .remark-b{font-weight:bold;font-size:${F.row}px;white-space:pre-wrap;word-break:break-word;line-height:1.45;}
   .row{display:flex;justify-content:space-between;margin:3px 0;font-size:${F.row}px;}
-  .grand{font-size:${F.grand}px;font-weight:900;border-top:2px solid #000;padding-top:6px;margin-top:4px;}
-  .footer{text-align:center;font-size:${F.foot}px;font-weight:normal;padding:8px 0;border-top:1px dashed #000;margin-top:4px;}
+  .subtotal{border-top:1px dashed #000;padding-top:6px;margin-top:6px;}
+  .grand{font-size:${F.grand}px;font-weight:900;background:#000;color:#fff;padding:7px 8px;margin-top:6px;}
+  .grand span{color:#fff;}
+  .footer{text-align:center;font-size:${F.foot}px;font-weight:normal;padding:8px 0;border-top:1px dashed #000;margin-top:6px;}
   ${isFOC ? `.foc{text-align:center;font-size:${F.foc}px;font-weight:900;border:2px solid #000;padding:6px;margin:6px 0;}` : ""}
 </style></head><body>
+${logoHtml}
 <div class="header">
   <div class="shop-name">${esc(shopInfo.name.toUpperCase())}</div>
   <div class="lao">${esc(shopInfo.nameLao)}</div>
@@ -282,14 +305,13 @@ ${isFOC ? '<div class="foc">★ FOC / ຟຣີ ★</div>' : ""}
   ${order.voidReason ? `<tr><td>★ ຍົກເລີກ</td><td>${esc(order.voidReason)}</td></tr>` : ""}
 </table>
 ${remarkHtml}
-<table class="items">${itemsHtml}</table>
-<div class="divider"></div>
-<div class="row"><span>ລວມ (${order.items.reduce((s,i)=>s+i.qty,0)} ລາຍການ)</span><span>${formatKip(order.total)}</span></div>
-${order.discount > 0 ? `<div class="row"><span>ສ່ວນຫຼຸດ</span><span>-${formatKip(order.discount)}</span></div>` : ""}
-<div class="row grand"><span>ທັງໝົດ</span><span>${isFOC ? "FOC ★" : formatKip(net)}</span></div>
+<table class="items">${itemsHeader}${itemsHtml}</table>
+<div class="row subtotal"><span>ລວມຍ່ອຍ / Subtotal (${order.items.reduce((s,i)=>s+i.qty,0)})</span><span>${formatKip(order.total)}</span></div>
+${order.discount > 0 ? `<div class="row"><span>ສ່ວນຫຼຸດ / Discount</span><span>-${formatKip(order.discount)}</span></div>` : ""}
+<div class="row grand"><span>ທັງໝົດ / TOTAL</span><span>${isFOC ? "FOC ★" : formatKip(net)}</span></div>
 ${order.payment === "cash" && order.received ? `
-<div class="row"><span>ຮັບເງິນ</span><span>${formatKip(order.received)}</span></div>
-<div class="row"><span>ເງິນທອນ</span><span>${formatKip(order.received - net)}</span></div>` : ""}
+<div class="row"><span>ຮັບເງິນ / Cash</span><span>${formatKip(order.received)}</span></div>
+<div class="row"><span>ເງິນທອນ / Change</span><span>${formatKip(order.received - net)}</span></div>` : ""}
 <div class="footer">${shopInfo.footer}</div>
 </body></html>`;
 
@@ -464,6 +486,7 @@ function ReceiptModal({ order, shopInfo, onClose, onSaveRemark }) {
     <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.65)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999 }}>
       <div style={{ background:"#fff",borderRadius:12,maxWidth:360,width:"90%",fontFamily:"monospace",maxHeight:"92vh",overflowY:"auto" }}>
         <div style={{ background:"#1a1a2e",color:"#f4d03f",padding:"18px 24px 14px",borderRadius:"12px 12px 0 0",textAlign:"center" }}>
+          {shopInfo.logo && <img src={shopInfo.logo} alt="logo" style={{ maxWidth:90,maxHeight:64,objectFit:"contain",marginBottom:8 }} />}
           <div style={{ fontSize:20,fontWeight:700,letterSpacing:2 }}>{shopInfo.name.toUpperCase()}</div>
           <div style={{ fontSize:11,color:"#fde68a",marginTop:2 }}>{shopInfo.nameLao}</div>
         </div>
@@ -1667,7 +1690,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
   const [addonForm,setAddonForm]=useState({name:"",nameLao:"",price:"",group:"milk"});
   const [shopForm,setShopForm]=useState(shopInfo);
   const [printerCfg,setPrinterCfg]=useState(()=>stor.get("printerConfig",PRINTER_DEFAULT));
-  const fileRef=useRef(null); const editFileRef=useRef(null); const qrRef=useRef(null);
+  const fileRef=useRef(null); const editFileRef=useRef(null); const qrRef=useRef(null); const logoRef=useRef(null);
 
   const savePrinter=(patch)=>{ const next={...stor.get("printerConfig",PRINTER_DEFAULT),...patch}; setPrinterCfg(next); stor.set("printerConfig",next); };
   const testPrint=()=>{
@@ -1682,7 +1705,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
     const f=e.target.files?.[0]; if(!f)return;
     if(f.size>1024*1024){alert("ໃຫຍ່ເກີນ 1MB");return;}
     const r=new FileReader();
-    r.onload=(ev)=>{ if(target==="form")setForm(x=>({...x,image:ev.target.result})); else if(target==="edit")setEditItem(x=>({...x,image:ev.target.result})); else{setQrImage(ev.target.result);stor.set("qrImage",ev.target.result);} };
+    r.onload=(ev)=>{ if(target==="form")setForm(x=>({...x,image:ev.target.result})); else if(target==="edit")setEditItem(x=>({...x,image:ev.target.result})); else if(target==="logo")setShopForm(x=>({...x,logo:ev.target.result})); else{setQrImage(ev.target.result);stor.set("qrImage",ev.target.result);} };
     r.readAsDataURL(f);
   };
 
@@ -1904,6 +1927,26 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             {[["ຊື່ຮ້ານ (EN)","name"],["ຊື່ຮ້ານ (ລາວ)","nameLao"],["ທີ່ຢູ່ (EN)","addressEn"],["ທີ່ຢູ່ (ລາວ)","address"],["ເມືອງ","city"],["ເບີໂທ","phone"],["ຂໍ້ຄວາມທ້າຍໃບ","footer"]].map(([l,k])=>(
               <div key={k}><div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>{l}</div><input value={shopForm[k]||""} onChange={e=>setShopForm({...shopForm,[k]:e.target.value})} style={inpStyle} /></div>
             ))}
+          </div>
+          <div style={{ borderTop:"1px solid #e5e7eb",marginTop:18,paddingTop:16 }}>
+            <div style={{ fontSize:14,fontWeight:600,marginBottom:4 }}>🖼️ ໂລໂກ້ຮ້ານ / Shop Logo</div>
+            <div style={{ fontSize:11,color:"#9ca3af",marginBottom:10 }}>ພິມຢູ່ຫົວໃບບິນ (ໂໝດ Dialog/ຮູບພາບເທົ່ານັ້ນ) · Prints at top of receipt (image/dialog mode only)</div>
+            {shopForm.logo?(
+              <div style={{ display:"flex",alignItems:"center",gap:16 }}>
+                <img src={shopForm.logo} alt="logo" style={{ width:110,height:110,borderRadius:12,border:"1px solid #e5e7eb",objectFit:"contain",background:"#f9f6f0" }} />
+                <div>
+                  <div style={{ fontSize:13,color:"#16a34a",fontWeight:600,marginBottom:8 }}>✓ ຕັ້ງຄ່າແລ້ວ</div>
+                  <button onClick={()=>logoRef.current?.click()} style={{ padding:"8px 14px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:600,cursor:"pointer",marginRight:8,fontSize:12 }}>ປ່ຽນ</button>
+                  <button onClick={()=>setShopForm(x=>({...x,logo:""}))} style={{ padding:"8px 14px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:8,fontWeight:600,cursor:"pointer",fontSize:12 }}>ລຶບ</button>
+                </div>
+              </div>
+            ):(
+              <button onClick={()=>logoRef.current?.click()} style={{ padding:24,background:"#f9f6f0",border:"2px dashed #d1d5db",borderRadius:12,cursor:"pointer",width:"100%",textAlign:"center" }}>
+                <div style={{ fontSize:32,marginBottom:6 }}>🖼️</div><div style={{ fontSize:14,fontWeight:600 }}>ອັບໂຫຼດ ໂລໂກ້ / Upload Logo</div>
+              </button>
+            )}
+            <input ref={logoRef} type="file" accept="image/*" onChange={e=>handleImg(e,"logo")} style={{ display:"none" }} />
+            <div style={{ fontSize:11,color:"#9ca3af",marginTop:8 }}>💡 ໃຊ້ຮູບຂາວດຳ ຊັດເຈນ ຈະພິມໄດ້ດີທີ່ສຸດ · Use a clear black &amp; white logo for best thermal print</div>
           </div>
           <button onClick={saveShop} style={{ marginTop:16,padding:"12px 24px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer" }}>💾 ບັນທຶກ</button>
         </div>
@@ -2131,6 +2174,21 @@ export default function App() {
 
   const currentShift=shifts.find(s=>!s.closedAt);
 
+  // ── Settings cloud sync (menu, categories, add-ons, shop info) ──
+  // These were local-only before, so editing the menu on one device never
+  // reached the others. Now each save is stamped with a timestamp and pushed to
+  // the cloud `settings` table; the poll below pulls any newer cloud version.
+  const pushSetting = (key, value) => {
+    const ts = new Date().toISOString();
+    stor.set(key, value);
+    stor.set(key + "Ts", ts);
+    syncSetting(key, value, ts);
+  };
+  const setMenuSync       = (v) => { setMenu(v);       pushSetting("menu", v); };
+  const setCategoriesSync = (v) => { setCategories(v); pushSetting("categories", v); };
+  const setAddonsSync     = (v) => { setAddons(v);     pushSetting("addons", v); };
+  const setShopInfoSync   = (v) => { setShopInfo(v);   pushSetting("shopInfo", v); };
+
   // Auto-save parked
   useEffect(() => { stor.set("parked", parkedOrders); }, [parkedOrders]);
 
@@ -2163,8 +2221,21 @@ export default function App() {
       });
       return Array.from(merged.values());
     };
+    // Apply a cloud setting only when it is strictly newer than our local copy,
+    // so a device that just saved doesn't get its own edit echoed back, and an
+    // older cloud value never clobbers a fresh local edit.
+    const applySetting = (key, setter, cloud) => {
+      const c = cloud[key];
+      if (!c) return;
+      const localTs = stor.get(key + "Ts", null);
+      if (!localTs || new Date(c.updatedAt) > new Date(localTs)) {
+        setter(c.value);
+        stor.set(key, c.value);
+        stor.set(key + "Ts", c.updatedAt);
+      }
+    };
     const sync = async () => {
-      const [cs, cf] = await Promise.all([fetchSales(), fetchShifts()]);
+      const [cs, cf, cset] = await Promise.all([fetchSales(), fetchShifts(), fetchSettings()]);
       if (cancelled) return;
       if (cs) {
         setSales(prev => {
@@ -2179,6 +2250,12 @@ export default function App() {
           stor.set("shifts", next);
           return next;
         });
+      }
+      if (cset) {
+        applySetting("menu", setMenu, cset);
+        applySetting("categories", setCategories, cset);
+        applySetting("addons", setAddons, cset);
+        applySetting("shopInfo", setShopInfo, cset);
       }
     };
     sync(); // immediate on login
@@ -2256,7 +2333,7 @@ export default function App() {
       {view==="dashboard"&&<DashboardView sales={sales} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
       {view==="accounting"&&<AccountingView sales={sales} />}
-      {view==="admin"&&<AdminView menu={menu} setMenu={setMenu} categories={categories} setCategories={setCategories} addons={addons} setAddons={setAddons} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfo} role={role} onResetTestData={resetTestData} />}
+      {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} />}
     </div>
   );
 
@@ -2282,7 +2359,7 @@ export default function App() {
         {view==="dashboard"&&<DashboardView sales={sales} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
         {view==="accounting"&&<AccountingView sales={sales} />}
-        {view==="admin"&&<AdminView menu={menu} setMenu={setMenu} categories={categories} setCategories={setCategories} addons={addons} setAddons={setAddons} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfo} role={role} onResetTestData={resetTestData} />}
+        {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} />}
       </div>
       <div style={{ position:"fixed",bottom:0,left:0,right:0,height:"calc(64px + env(safe-area-inset-bottom, 0px))",background:"#1a1a2e",display:"flex",alignItems:"flex-start",paddingBottom:"env(safe-area-inset-bottom, 0px)",zIndex:200,borderTop:"1px solid rgba(255,255,255,0.08)",boxSizing:"border-box" }}>
         {allowed.map(n=>(

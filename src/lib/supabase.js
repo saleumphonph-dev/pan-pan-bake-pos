@@ -100,6 +100,34 @@ export async function fetchShifts() {
   } catch { return null; }
 }
 
+/** Fetch all settings rows (menu, categories, add-ons, shop info) keyed by name.
+ *  Returns { key: { value, updatedAt } } or null on error. */
+export async function fetchSettings() {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase.from("settings").select("*");
+    if (error) return null;
+    const out = {};
+    data.forEach(r => { out[r.key] = { value: r.value, updatedAt: r.updated_at }; });
+    return out;
+  } catch { return null; }
+}
+
+/** Upsert one setting (menu/categories/addons/shopInfo) with a timestamp so the
+ *  newest edit wins across devices. Fire-and-forget, never throws. */
+export async function syncSetting(key, value, updatedAt) {
+  if (!supabase) return;
+  try {
+    await supabase.from("settings").upsert({
+      key,
+      value,
+      updated_at: updatedAt || new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn("[Supabase] syncSetting failed:", e.message);
+  }
+}
+
 /** Check if Supabase is configured and reachable */
 export async function checkConnection() {
   if (!supabase) return "no-db";
