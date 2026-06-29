@@ -215,43 +215,46 @@ function printReceipt(order, shopInfo) {
   // to the Bluetooth Xprinter AND keeps Lao text (printed as a rasterized image). ──
   const is80 = cfg.paperWidth === "80";
   const W = is80 ? "80mm" : "58mm";
+  // Larger fonts + pure black + full width = crisp, dark thermal output that
+  // fills the paper. No emoji/gray (thermal printers render those as garbage/faded).
   const F = is80
-    ? { base:12, shop:18, lao:11, meta:11, item:11, row:12, grand:16, foc:20, foot:10, pad:6 }
-    : { base:11, shop:15, lao:10, meta:10, item:10, row:11, grand:14, foc:17, foot:9,  pad:3 };
+    ? { base:14, shop:27, lao:13, meta:14, item:14, row:15, grand:21, foc:24, foot:13, pad:6 }
+    : { base:12, shop:19, lao:11, meta:12, item:12, row:13, grand:17, foc:19, foot:11, pad:4 };
 
   const net = order.total - (order.discount || 0);
   const itemsHtml = order.items.map(it => {
     const addonText = (it.addons || []).map(a => `+ ${a.nameLao} (${formatKip(a.price)})`).join("<br>");
-    const sweetText = it.sweetness ? sweetLabel(it.sweetness) : "";
+    const sweetText = it.sweetness ? sweetLabel(it.sweetness).replace(/^[^\s]+\s/, "") : ""; // drop leading emoji
     const linePrice = itemPrice(it);
     return `<tr>
-      <td style="padding:2px 0">${it.emoji} ${it.name}<br><small style="color:#888">${it.nameLao}</small>${sweetText ? `<br><small style="color:#16a34a">${sweetText}</small>` : ""}${addonText ? `<br><small style="color:#7c3aed">${addonText}</small>` : ""}</td>
-      <td style="text-align:right;padding:2px 0">${it.qty}×${formatKip(linePrice)}</td>
-      <td style="text-align:right;padding:2px 0;font-weight:600">${formatKip(linePrice * it.qty)}</td>
+      <td style="padding:3px 0">${it.name}<br><small>${it.nameLao}</small>${sweetText ? `<br><small>${sweetText}</small>` : ""}${addonText ? `<br><small>${addonText}</small>` : ""}</td>
+      <td style="text-align:right;padding:3px 0;white-space:nowrap">${it.qty}×${formatKip(linePrice)}</td>
+      <td style="text-align:right;padding:3px 0;font-weight:bold;white-space:nowrap">${formatKip(linePrice * it.qty)}</td>
     </tr>`;
   }).join("");
 
-  const payLabel = order.payment === "cash" ? "💵 ເງິນສົດ" : order.payment === "qr" ? "📲 QR Code" : order.payment === "transfer" ? "🏦 ໂອນ" : "🎁 FOC";
+  const payLabel = order.payment === "cash" ? "ເງິນສົດ" : order.payment === "qr" ? "QR Code" : order.payment === "transfer" ? "ໂອນ" : "FOC";
   const isFOC = order.payment === "foc";
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
   @page{margin:0;size:${W} auto;}
-  *{margin:0;padding:0;box-sizing:border-box;}
-  body{font-family:'Courier New',monospace;width:${W};margin:0 auto;font-size:${F.base}px;padding:${F.pad}px;}
-  .header{text-align:center;padding:8px 0;border-bottom:2px solid #000;}
+  *{margin:0;padding:0;box-sizing:border-box;color:#000;}
+  body{font-family:'Courier New',monospace;width:100%;font-weight:bold;font-size:${F.base}px;padding:${F.pad}px;color:#000;}
+  small{font-size:${F.lao}px;font-weight:normal;}
+  .header{text-align:center;padding:6px 0 8px;border-bottom:2px solid #000;}
   .shop-name{font-size:${F.shop}px;font-weight:900;letter-spacing:1px;}
-  .lao{font-size:${F.lao}px;color:#555;}
-  .meta{padding:8px 0;border-bottom:1px dashed #aaa;font-size:${F.meta}px;width:100%;}
-  .meta td:first-child{color:#888;width:40%;}
-  .meta td:last-child{font-weight:600;}
+  .lao{font-size:${F.lao}px;font-weight:normal;}
+  .meta{padding:8px 0;border-bottom:1px dashed #000;font-size:${F.meta}px;width:100%;}
+  .meta td:first-child{width:38%;font-weight:normal;}
+  .meta td:last-child{font-weight:bold;text-align:right;}
   .items{width:100%;border-collapse:collapse;padding:8px 0;}
   .items td{font-size:${F.item}px;vertical-align:top;}
-  .divider{border-top:1px dashed #aaa;margin:6px 0;}
-  .row{display:flex;justify-content:space-between;margin:2px 0;font-size:${F.row}px;}
+  .divider{border-top:1px dashed #000;margin:6px 0;}
+  .row{display:flex;justify-content:space-between;margin:3px 0;font-size:${F.row}px;}
   .grand{font-size:${F.grand}px;font-weight:900;border-top:2px solid #000;padding-top:6px;margin-top:4px;}
-  .footer{text-align:center;font-size:${F.foot}px;color:#888;padding:8px 0;border-top:1px dashed #aaa;margin-top:4px;}
-  ${isFOC ? `.foc{text-align:center;font-size:${F.foc}px;font-weight:900;color:#16a34a;border:2px solid #16a34a;padding:6px;margin:6px 0;}` : ""}
+  .footer{text-align:center;font-size:${F.foot}px;font-weight:normal;padding:8px 0;border-top:1px dashed #000;margin-top:4px;}
+  ${isFOC ? `.foc{text-align:center;font-size:${F.foc}px;font-weight:900;border:2px solid #000;padding:6px;margin:6px 0;}` : ""}
 </style></head><body>
 <div class="header">
   <div class="shop-name">${shopInfo.name.toUpperCase()}</div>
@@ -267,17 +270,17 @@ ${isFOC ? '<div class="foc">★ FOC / ຟຣີ ★</div>' : ""}
   <tr><td>ພະນັກງານ</td><td>${order.cashier || "—"}</td></tr>
   <tr><td>ຈ່າຍ</td><td>${payLabel}</td></tr>
   ${order.note ? `<tr><td>ໝາຍເຫດ</td><td>${order.note}</td></tr>` : ""}
-  ${order.voidReason ? `<tr><td style="color:#dc2626">★ ຍົກເລີກ</td><td style="color:#dc2626">${order.voidReason}</td></tr>` : ""}
+  ${order.voidReason ? `<tr><td>★ ຍົກເລີກ</td><td>${order.voidReason}</td></tr>` : ""}
 </table>
 <div class="divider"></div>
 <table class="items">${itemsHtml}</table>
 <div class="divider"></div>
 <div class="row"><span>ລວມ (${order.items.reduce((s,i)=>s+i.qty,0)} ລາຍການ)</span><span>${formatKip(order.total)}</span></div>
-${order.discount > 0 ? `<div class="row" style="color:#dc2626"><span>ສ່ວນຫຼຸດ</span><span>-${formatKip(order.discount)}</span></div>` : ""}
+${order.discount > 0 ? `<div class="row"><span>ສ່ວນຫຼຸດ</span><span>-${formatKip(order.discount)}</span></div>` : ""}
 <div class="row grand"><span>ທັງໝົດ</span><span>${isFOC ? "FOC ★" : formatKip(net)}</span></div>
 ${order.payment === "cash" && order.received ? `
-<div class="row" style="color:#16a34a"><span>ຮັບເງິນ</span><span>${formatKip(order.received)}</span></div>
-<div class="row" style="color:#7c3aed"><span>ເງິນທອນ</span><span>${formatKip(order.received - net)}</span></div>` : ""}
+<div class="row"><span>ຮັບເງິນ</span><span>${formatKip(order.received)}</span></div>
+<div class="row"><span>ເງິນທອນ</span><span>${formatKip(order.received - net)}</span></div>` : ""}
 <div class="footer">${shopInfo.footer}</div>
 </body></html>`;
 
