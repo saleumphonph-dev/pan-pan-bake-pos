@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.06.30-4";
+const BUILD_VERSION = "2026.06.30-5";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -277,13 +277,7 @@ function printReceipt(order, shopInfo) {
   // print-color-adjust:exact forces the black TOTAL bar to actually print.
   const css = `
   @page{margin:0;size:${W} auto;}
-  @media print{
-    html,body{margin:0 !important;padding:0 !important;background:#fff !important;}
-    body > *{display:none !important;}
-    #root{display:none !important;}
-    #ppb-print-root{display:block !important;position:static !important;}
-  }
-  #ppb-print-root{display:none;width:100%;font-family:'Courier New',monospace;font-weight:bold;font-size:${F.base}px;padding:${F.pad}px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  #ppb-print-root{display:block;width:100%;font-family:'Courier New',monospace;font-weight:bold;font-size:${F.base}px;padding:${F.pad}px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   #ppb-print-root *{margin:0;padding:0;box-sizing:border-box;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   #ppb-print-root small{font-size:${F.lao}px;font-weight:normal;}
   #ppb-print-root .logo{text-align:center;padding:4px 0 2px;}
@@ -334,8 +328,11 @@ ${order.payment === "cash" && order.received ? `
 <div class="row"><span>ເງິນທອນ / Change</span><span>${formatKip(order.received - net)}</span></div>` : ""}
 <div class="footer">${esc(shopInfo.footer)}<br><small>v${BUILD_VERSION}</small></div>`;
 
-  // Inject a print stylesheet + the receipt into the MAIN document, print, then
-  // remove them. Cleanup runs on afterprint (with a long fallback timer).
+  // IMPORTANT: This tablet's Android/RawBT print path renders the page using
+  // SCREEN styles (it ignores @media print). So instead of a print-only stylesheet
+  // we PHYSICALLY swap the on-screen DOM: hide the React app (#root) and show only
+  // the receipt, call print(), then restore. Whatever media the printer uses, the
+  // only thing on the page is the receipt.
   document.getElementById("ppb-print-style")?.remove();
   document.getElementById("ppb-print-root")?.remove();
 
@@ -349,28 +346,44 @@ ${order.payment === "cash" && order.received ? `
   rootEl.innerHTML = bodyHtml;
   document.body.appendChild(rootEl);
 
-  let cleaned = false;
-  const cleanup = () => {
-    if (cleaned) return;
-    cleaned = true;
+  const appRoot = document.getElementById("root");
+  const prevAppDisplay = appRoot ? appRoot.style.display : "";
+  const prevScrollY = window.scrollY;
+
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    if (appRoot) appRoot.style.display = prevAppDisplay; // bring the app back
     document.getElementById("ppb-print-style")?.remove();
     document.getElementById("ppb-print-root")?.remove();
     window.removeEventListener("afterprint", onAfter);
+    window.removeEventListener("focus", onAfter);
+    document.removeEventListener("visibilitychange", onVis);
+    window.scrollTo(0, prevScrollY);
   };
-  const onAfter = () => setTimeout(cleanup, 300);
+  // Restore only AFTER the print capture is done. afterprint fires when the
+  // dialog closes; focus/visibility fire when the user returns from the print
+  // sheet. A long fallback guarantees the app never stays hidden.
+  const onAfter = () => setTimeout(restore, 300);
+  const onVis = () => { if (document.visibilityState === "visible") setTimeout(restore, 300); };
   window.addEventListener("afterprint", onAfter);
+  window.addEventListener("focus", onAfter);
+  document.addEventListener("visibilitychange", onVis);
 
   let fired = false;
   const fire = () => {
     if (fired) return;
     fired = true;
-    try { window.focus(); window.print(); }
-    catch (e) { alert("ພິມບໍ່ໄດ້ / Print failed: " + e.message); cleanup(); return; }
-    setTimeout(cleanup, 60000); // safety net if afterprint never fires
+    if (appRoot) appRoot.style.display = "none"; // actually hide the app on screen
+    window.scrollTo(0, 0);
+    try { window.print(); }
+    catch (e) { alert("ພິມບໍ່ໄດ້ / Print failed: " + e.message); restore(); return; }
+    setTimeout(restore, 60000); // safety net so the app is never stuck hidden
   };
 
   // If there's a logo (data URL), wait for it to decode so it isn't blank; else
-  // a short tick for layout. Then open the print dialog.
+  // a short tick for layout. Then swap in the receipt and print.
   const logoImg = rootEl.querySelector(".logo img");
   if (logoImg && !logoImg.complete) {
     logoImg.onload = logoImg.onerror = () => setTimeout(fire, 80);
