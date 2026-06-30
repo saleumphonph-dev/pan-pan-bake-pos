@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.01-1";
+const BUILD_VERSION = "2026.07.01-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -162,7 +162,7 @@ const PRINTER_DEFAULT = { paperWidth: "80", mode: "dialog" };
 // glyphs; item names are still printed as entered.
 function receiptText(order, shopInfo) {
   const cfg = stor.get("printerConfig", PRINTER_DEFAULT);
-  const cols = cfg.paperWidth === "80" ? 42 : 32;
+  const cols = cfg.paperWidth === "80" ? 48 : 32; // 80mm thermal = 48 cols (Font A), 58mm = 32
   const sep = "-".repeat(cols);
   const center = (s = "") => { s = String(s); if (s.length >= cols) return s.slice(0, cols); return " ".repeat(Math.floor((cols - s.length) / 2)) + s; };
   const lr = (l = "", r = "") => { l = String(l); r = String(r); const sp = cols - l.length - r.length; return sp > 0 ? l + " ".repeat(sp) + r : (l + " " + r); };
@@ -233,11 +233,15 @@ function printReceipt(order, shopInfo) {
   // to the Bluetooth Xprinter AND keeps Lao text (printed as a rasterized image). ──
   const is80 = cfg.paperWidth === "80";
   const W = is80 ? "80mm" : "58mm";
-  // Larger fonts + pure black + full width = crisp, dark thermal output that
-  // fills the paper. No emoji/gray (thermal printers render those as garbage/faded).
+  // During print we force the layout viewport to the printer's native dot width
+  // (80mm = 576 dots, 58mm = 384 dots) so the receipt maps ~1:1 to the paper and
+  // FILLS it edge-to-edge (otherwise it lays out at the wide tablet screen width
+  // and the printer scales it down, leaving a blank strip on the right).
+  const PRINT_VP = is80 ? 576 : 384;
+  // Sizes are tuned for that fixed viewport. SIDE = even left/right margin (px).
   const F = is80
-    ? { base:23, shop:42, lao:19, meta:23, item:23, row:26, grand:40, foc:34, foot:18, pad:2, logo:190 }
-    : { base:18, shop:31, lao:16, meta:18, item:18, row:21, grand:31, foc:27, foot:15, pad:2, logo:150 };
+    ? { base:23, shop:40, lao:19, meta:23, item:23, row:26, grand:38, foc:34, foot:18, padY:14, side:20, logo:200 }
+    : { base:20, shop:32, lao:16, meta:20, item:20, row:22, grand:32, foc:28, foot:15, padY:10, side:14, logo:150 };
 
   const net = order.total - (order.discount || 0);
   const itemsHtml = order.items.map(it => {
@@ -280,7 +284,7 @@ function printReceipt(order, shopInfo) {
   // Emphasis comes from font SIZE and borders, not weight.
   const css = `
   @page{margin:0;size:${W} auto;}
-  #ppb-print-root{display:block;width:100%;font-family:'Courier New',monospace;font-weight:normal;font-size:${F.base}px;padding:${F.pad}px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  #ppb-print-root{display:block;width:100%;font-family:'Courier New',monospace;font-weight:normal;font-size:${F.base}px;padding:${F.padY}px ${F.side}px ${F.padY + 10}px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   #ppb-print-root *{margin:0;padding:0;box-sizing:border-box;color:#000;font-weight:normal;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   #ppb-print-root small{font-size:${F.lao}px;}
   #ppb-print-root .logo{text-align:center;padding:4px 0 2px;}
@@ -352,11 +356,16 @@ ${order.payment === "cash" && order.received ? `
   const appRoot = document.getElementById("root");
   const prevAppDisplay = appRoot ? appRoot.style.display : "";
   const prevScrollY = window.scrollY;
+  // Force the layout viewport to the printer's dot width so the receipt fills
+  // the paper, then restore it afterwards.
+  const vpMeta = document.querySelector('meta[name="viewport"]');
+  const prevVp = vpMeta ? vpMeta.getAttribute("content") : null;
 
   let restored = false;
   const restore = () => {
     if (restored) return;
     restored = true;
+    if (vpMeta && prevVp != null) vpMeta.setAttribute("content", prevVp); // restore viewport
     if (appRoot) appRoot.style.display = prevAppDisplay; // bring the app back
     document.getElementById("ppb-print-style")?.remove();
     document.getElementById("ppb-print-root")?.remove();
@@ -375,10 +384,12 @@ ${order.payment === "cash" && order.received ? `
   const fire = () => {
     if (fired) return;
     fired = true;
+    // Narrow the viewport to the printer width so the receipt fills the paper.
+    if (vpMeta) vpMeta.setAttribute("content", `width=${PRINT_VP}, initial-scale=1`);
     if (appRoot) appRoot.style.display = "none"; // actually hide the app on screen
     window.scrollTo(0, 0);
     // Force a reflow + two animation frames so the browser actually PAINTS the
-    // receipt (app hidden) before we ask the print pipeline to capture it.
+    // receipt (app hidden, new viewport applied) before the print pipeline captures it.
     void document.body.offsetHeight;
     requestAnimationFrame(() => requestAnimationFrame(() => {
       try { window.print(); }
