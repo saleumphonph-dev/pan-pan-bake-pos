@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.06.30-6";
+const BUILD_VERSION = "2026.07.01-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -247,7 +247,7 @@ function printReceipt(order, shopInfo) {
     return `<tr>
       <td style="padding:4px 0">${it.name}<br><small>${it.nameLao}</small>${sweetText ? `<br><small>${sweetText}</small>` : ""}${addonText ? `<br><small>${addonText}</small>` : ""}</td>
       <td style="text-align:center;padding:4px 0;white-space:nowrap">${formatKip(unit)}<br><small>× ${it.qty}</small></td>
-      <td style="text-align:right;padding:4px 0;font-weight:bold;white-space:nowrap">${formatKip(unit * it.qty)}</td>
+      <td style="text-align:right;padding:4px 0;white-space:nowrap">${formatKip(unit * it.qty)}</td>
     </tr>`;
   }).join("");
   // Column header so the unit price, quantity and amount are clearly labelled.
@@ -275,32 +275,35 @@ function printReceipt(order, shopInfo) {
   // print framework prints the receipt — not a screenshot of the app UI (which
   // is what happens when you print from a hidden iframe on Android tablets).
   // print-color-adjust:exact forces the black TOTAL bar to actually print.
+  // Regular weight everywhere — on this thermal printer bold prints heavy/blurry
+  // and is harder to read than regular (matches the cleaner RawBT direct look).
+  // Emphasis comes from font SIZE and borders, not weight.
   const css = `
   @page{margin:0;size:${W} auto;}
-  #ppb-print-root{display:block;width:100%;font-family:'Courier New',monospace;font-weight:bold;font-size:${F.base}px;padding:${F.pad}px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-  #ppb-print-root *{margin:0;padding:0;box-sizing:border-box;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-  #ppb-print-root small{font-size:${F.lao}px;font-weight:normal;}
+  #ppb-print-root{display:block;width:100%;font-family:'Courier New',monospace;font-weight:normal;font-size:${F.base}px;padding:${F.pad}px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  #ppb-print-root *{margin:0;padding:0;box-sizing:border-box;color:#000;font-weight:normal;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  #ppb-print-root small{font-size:${F.lao}px;}
   #ppb-print-root .logo{text-align:center;padding:4px 0 2px;}
   #ppb-print-root .logo img{max-width:${F.logo}px;max-height:${F.logo}px;width:auto;height:auto;filter:grayscale(1) contrast(2);}
   #ppb-print-root .header{text-align:center;padding:6px 0 8px;border-bottom:2px solid #000;}
-  #ppb-print-root .shop-name{font-size:${F.shop}px;font-weight:900;letter-spacing:1px;}
-  #ppb-print-root .lao{font-size:${F.lao}px;font-weight:normal;}
+  #ppb-print-root .shop-name{font-size:${F.shop}px;letter-spacing:1px;}
+  #ppb-print-root .lao{font-size:${F.lao}px;}
   #ppb-print-root .meta{padding:8px 0;border-bottom:1px dashed #000;font-size:${F.meta}px;width:100%;}
-  #ppb-print-root .meta td:first-child{width:38%;font-weight:normal;}
-  #ppb-print-root .meta td:last-child{font-weight:bold;text-align:right;}
+  #ppb-print-root .meta td:first-child{width:38%;}
+  #ppb-print-root .meta td:last-child{text-align:right;}
   #ppb-print-root .items{width:100%;border-collapse:collapse;padding:8px 0;}
   #ppb-print-root .items td{font-size:${F.item}px;vertical-align:top;}
-  #ppb-print-root .items tr.ihead td{font-weight:bold;border-bottom:1px solid #000;padding-bottom:3px;}
+  #ppb-print-root .items tr.ihead td{border-bottom:1px solid #000;padding-bottom:3px;}
   #ppb-print-root .divider{border-top:1px dashed #000;margin:6px 0;}
   #ppb-print-root .remark{padding:8px 10px;margin:6px 0;border:2px solid #000;}
-  #ppb-print-root .remark-h{font-weight:bold;font-size:${F.meta}px;margin-bottom:4px;}
-  #ppb-print-root .remark-b{font-weight:bold;font-size:${F.row}px;white-space:pre-wrap;word-break:break-word;line-height:1.45;}
+  #ppb-print-root .remark-h{font-size:${F.meta}px;margin-bottom:4px;}
+  #ppb-print-root .remark-b{font-size:${F.row}px;white-space:pre-wrap;word-break:break-word;line-height:1.45;}
   #ppb-print-root .row{display:flex;justify-content:space-between;margin:3px 0;font-size:${F.row}px;}
   #ppb-print-root .subtotal{border-top:1px dashed #000;padding-top:6px;margin-top:6px;}
-  #ppb-print-root .grand{font-size:${F.grand}px;font-weight:900;border-top:3px solid #000;border-bottom:3px solid #000;padding:7px 0;margin-top:8px;}
+  #ppb-print-root .grand{font-size:${F.grand}px;border-top:3px solid #000;border-bottom:3px solid #000;padding:7px 0;margin-top:8px;}
   #ppb-print-root .grand span{color:#000 !important;}
-  #ppb-print-root .footer{text-align:center;font-size:${F.foot}px;font-weight:normal;padding:8px 0;border-top:1px dashed #000;margin-top:6px;}
-  #ppb-print-root .foc{text-align:center;font-size:${F.foc}px;font-weight:900;border:2px solid #000;padding:6px;margin:6px 0;}`;
+  #ppb-print-root .footer{text-align:center;font-size:${F.foot}px;padding:8px 0;border-top:1px dashed #000;margin-top:6px;}
+  #ppb-print-root .foc{text-align:center;font-size:${F.foc}px;border:2px solid #000;padding:6px;margin:6px 0;}`;
 
   const bodyHtml = `${logoHtml}
 <div class="header">
@@ -358,18 +361,15 @@ ${order.payment === "cash" && order.received ? `
     document.getElementById("ppb-print-style")?.remove();
     document.getElementById("ppb-print-root")?.remove();
     window.removeEventListener("afterprint", onAfter);
-    window.removeEventListener("focus", onAfter);
-    document.removeEventListener("visibilitychange", onVis);
     window.scrollTo(0, prevScrollY);
   };
-  // Restore only AFTER the print capture is done. afterprint fires when the
-  // dialog closes; focus/visibility fire when the user returns from the print
-  // sheet. A long fallback guarantees the app never stays hidden.
-  const onAfter = () => setTimeout(restore, 300);
-  const onVis = () => { if (document.visibilityState === "visible") setTimeout(restore, 300); };
+  // IMPORTANT: Do NOT restore on focus/visibilitychange. On Android, opening the
+  // print sheet fires those immediately, which used to bring the app/modal back
+  // BEFORE the printer captured the screen — so it printed the modal instead of
+  // the receipt. Restore only on afterprint (with a delay so the async capture
+  // finishes first) plus a long fallback so the app is never stuck hidden.
+  const onAfter = () => setTimeout(restore, 2000);
   window.addEventListener("afterprint", onAfter);
-  window.addEventListener("focus", onAfter);
-  document.addEventListener("visibilitychange", onVis);
 
   let fired = false;
   const fire = () => {
@@ -377,19 +377,24 @@ ${order.payment === "cash" && order.received ? `
     fired = true;
     if (appRoot) appRoot.style.display = "none"; // actually hide the app on screen
     window.scrollTo(0, 0);
-    try { window.print(); }
-    catch (e) { alert("ພິມບໍ່ໄດ້ / Print failed: " + e.message); restore(); return; }
-    setTimeout(restore, 60000); // safety net so the app is never stuck hidden
+    // Force a reflow + two animation frames so the browser actually PAINTS the
+    // receipt (app hidden) before we ask the print pipeline to capture it.
+    void document.body.offsetHeight;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      try { window.print(); }
+      catch (e) { alert("ພິມບໍ່ໄດ້ / Print failed: " + e.message); restore(); return; }
+      setTimeout(restore, 15000); // safety net so the app is never stuck hidden
+    }));
   };
 
   // If there's a logo (data URL), wait for it to decode so it isn't blank; else
   // a short tick for layout. Then swap in the receipt and print.
   const logoImg = rootEl.querySelector(".logo img");
   if (logoImg && !logoImg.complete) {
-    logoImg.onload = logoImg.onerror = () => setTimeout(fire, 80);
+    logoImg.onload = logoImg.onerror = () => setTimeout(fire, 120);
     setTimeout(fire, 1500); // fallback if the image events never fire
   } else {
-    setTimeout(fire, 150);
+    setTimeout(fire, 200);
   }
 }
 
