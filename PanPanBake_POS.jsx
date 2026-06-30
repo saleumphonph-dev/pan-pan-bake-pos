@@ -266,35 +266,44 @@ function printReceipt(order, shopInfo) {
     ? `<div class="logo"><img src="${shopInfo.logo}" alt=""></div>`
     : "";
 
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<style>
+  // All receipt styles are scoped under #ppb-print-root. The @media print block
+  // hides the whole app (body > *) and shows ONLY the receipt, so the Android
+  // print framework prints the receipt — not a screenshot of the app UI (which
+  // is what happens when you print from a hidden iframe on Android tablets).
+  // print-color-adjust:exact forces the black TOTAL bar to actually print.
+  const css = `
   @page{margin:0;size:${W} auto;}
-  *{margin:0;padding:0;box-sizing:border-box;color:#000;}
-  body{font-family:'Courier New',monospace;width:100%;font-weight:bold;font-size:${F.base}px;padding:${F.pad}px;color:#000;}
-  small{font-size:${F.lao}px;font-weight:normal;}
-  .logo{text-align:center;padding:4px 0 2px;}
-  .logo img{max-width:${F.logo}px;max-height:${F.logo}px;width:auto;height:auto;filter:grayscale(1) contrast(2);}
-  .header{text-align:center;padding:6px 0 8px;border-bottom:2px solid #000;}
-  .shop-name{font-size:${F.shop}px;font-weight:900;letter-spacing:1px;}
-  .lao{font-size:${F.lao}px;font-weight:normal;}
-  .meta{padding:8px 0;border-bottom:1px dashed #000;font-size:${F.meta}px;width:100%;}
-  .meta td:first-child{width:38%;font-weight:normal;}
-  .meta td:last-child{font-weight:bold;text-align:right;}
-  .items{width:100%;border-collapse:collapse;padding:8px 0;}
-  .items td{font-size:${F.item}px;vertical-align:top;}
-  .items tr.ihead td{font-weight:bold;border-bottom:1px solid #000;padding-bottom:3px;}
-  .divider{border-top:1px dashed #000;margin:6px 0;}
-  .remark{padding:8px 10px;margin:6px 0;border:2px solid #000;}
-  .remark-h{font-weight:bold;font-size:${F.meta}px;margin-bottom:4px;}
-  .remark-b{font-weight:bold;font-size:${F.row}px;white-space:pre-wrap;word-break:break-word;line-height:1.45;}
-  .row{display:flex;justify-content:space-between;margin:3px 0;font-size:${F.row}px;}
-  .subtotal{border-top:1px dashed #000;padding-top:6px;margin-top:6px;}
-  .grand{font-size:${F.grand}px;font-weight:900;background:#000;color:#fff;padding:7px 8px;margin-top:6px;}
-  .grand span{color:#fff;}
-  .footer{text-align:center;font-size:${F.foot}px;font-weight:normal;padding:8px 0;border-top:1px dashed #000;margin-top:6px;}
-  ${isFOC ? `.foc{text-align:center;font-size:${F.foc}px;font-weight:900;border:2px solid #000;padding:6px;margin:6px 0;}` : ""}
-</style></head><body>
-${logoHtml}
+  @media print{
+    html,body{margin:0 !important;padding:0 !important;background:#fff !important;}
+    body > *{display:none !important;}
+    #ppb-print-root{display:block !important;}
+  }
+  #ppb-print-root{display:none;width:100%;font-family:'Courier New',monospace;font-weight:bold;font-size:${F.base}px;padding:${F.pad}px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  #ppb-print-root *{margin:0;padding:0;box-sizing:border-box;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  #ppb-print-root small{font-size:${F.lao}px;font-weight:normal;}
+  #ppb-print-root .logo{text-align:center;padding:4px 0 2px;}
+  #ppb-print-root .logo img{max-width:${F.logo}px;max-height:${F.logo}px;width:auto;height:auto;filter:grayscale(1) contrast(2);}
+  #ppb-print-root .header{text-align:center;padding:6px 0 8px;border-bottom:2px solid #000;}
+  #ppb-print-root .shop-name{font-size:${F.shop}px;font-weight:900;letter-spacing:1px;}
+  #ppb-print-root .lao{font-size:${F.lao}px;font-weight:normal;}
+  #ppb-print-root .meta{padding:8px 0;border-bottom:1px dashed #000;font-size:${F.meta}px;width:100%;}
+  #ppb-print-root .meta td:first-child{width:38%;font-weight:normal;}
+  #ppb-print-root .meta td:last-child{font-weight:bold;text-align:right;}
+  #ppb-print-root .items{width:100%;border-collapse:collapse;padding:8px 0;}
+  #ppb-print-root .items td{font-size:${F.item}px;vertical-align:top;}
+  #ppb-print-root .items tr.ihead td{font-weight:bold;border-bottom:1px solid #000;padding-bottom:3px;}
+  #ppb-print-root .divider{border-top:1px dashed #000;margin:6px 0;}
+  #ppb-print-root .remark{padding:8px 10px;margin:6px 0;border:2px solid #000;}
+  #ppb-print-root .remark-h{font-weight:bold;font-size:${F.meta}px;margin-bottom:4px;}
+  #ppb-print-root .remark-b{font-weight:bold;font-size:${F.row}px;white-space:pre-wrap;word-break:break-word;line-height:1.45;}
+  #ppb-print-root .row{display:flex;justify-content:space-between;margin:3px 0;font-size:${F.row}px;}
+  #ppb-print-root .subtotal{border-top:1px dashed #000;padding-top:6px;margin-top:6px;}
+  #ppb-print-root .grand{font-size:${F.grand}px;font-weight:900;background:#000 !important;padding:7px 8px;margin-top:6px;}
+  #ppb-print-root .grand span{color:#fff !important;}
+  #ppb-print-root .footer{text-align:center;font-size:${F.foot}px;font-weight:normal;padding:8px 0;border-top:1px dashed #000;margin-top:6px;}
+  #ppb-print-root .foc{text-align:center;font-size:${F.foc}px;font-weight:900;border:2px solid #000;padding:6px;margin:6px 0;}`;
+
+  const bodyHtml = `${logoHtml}
 <div class="header">
   <div class="shop-name">${esc(shopInfo.name.toUpperCase())}</div>
   <div class="lao">${esc(shopInfo.nameLao)}</div>
@@ -318,50 +327,52 @@ ${order.discount > 0 ? `<div class="row"><span>ສ່ວນຫຼຸດ / Discou
 ${order.payment === "cash" && order.received ? `
 <div class="row"><span>ຮັບເງິນ / Cash</span><span>${formatKip(order.received)}</span></div>
 <div class="row"><span>ເງິນທອນ / Change</span><span>${formatKip(order.received - net)}</span></div>` : ""}
-<div class="footer">${shopInfo.footer}</div>
-</body></html>`;
+<div class="footer">${esc(shopInfo.footer)}</div>`;
 
-  // Print via a hidden iframe instead of window.open(). Popup windows are blocked
-  // or fail to trigger the print dialog on Android tablets (Galaxy Tab) and iOS,
-  // whereas an in-page iframe prints reliably on tablet, phone, and desktop.
-  const existing = document.getElementById("ppb-print-frame");
-  if (existing) existing.remove();
+  // Inject a print stylesheet + the receipt into the MAIN document, print, then
+  // remove them. Cleanup runs on afterprint (with a long fallback timer).
+  document.getElementById("ppb-print-style")?.remove();
+  document.getElementById("ppb-print-root")?.remove();
 
-  const iframe = document.createElement("iframe");
-  iframe.id = "ppb-print-frame";
-  iframe.setAttribute("aria-hidden", "true");
-  iframe.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;";
-  document.body.appendChild(iframe);
+  const styleEl = document.createElement("style");
+  styleEl.id = "ppb-print-style";
+  styleEl.textContent = css;
+  document.head.appendChild(styleEl);
 
-  let done = false;
-  const cleanup = () => { const f = document.getElementById("ppb-print-frame"); if (f) f.remove(); };
+  const rootEl = document.createElement("div");
+  rootEl.id = "ppb-print-root";
+  rootEl.innerHTML = bodyHtml;
+  document.body.appendChild(rootEl);
 
-  const doPrint = () => {
-    if (done) return;
-    done = true;
-    try {
-      const win = iframe.contentWindow;
-      win.focus();
-      // afterprint fires whether the user prints, saves PDF, or cancels.
-      // Don't remove the iframe immediately — on Android the print framework may
-      // still be reading from it. Clean up shortly after afterprint, with a long
-      // fallback timer in case afterprint never fires.
-      win.addEventListener("afterprint", () => setTimeout(cleanup, 500));
-      win.print();
-      setTimeout(cleanup, 60000);
-    } catch (e) {
-      alert("ພິມບໍ່ໄດ້ / Print failed: " + e.message);
-      cleanup();
-    }
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    document.getElementById("ppb-print-style")?.remove();
+    document.getElementById("ppb-print-root")?.remove();
+    window.removeEventListener("afterprint", onAfter);
+  };
+  const onAfter = () => setTimeout(cleanup, 300);
+  window.addEventListener("afterprint", onAfter);
+
+  let fired = false;
+  const fire = () => {
+    if (fired) return;
+    fired = true;
+    try { window.focus(); window.print(); }
+    catch (e) { alert("ພິມບໍ່ໄດ້ / Print failed: " + e.message); cleanup(); return; }
+    setTimeout(cleanup, 60000); // safety net if afterprint never fires
   };
 
-  iframe.onload = () => setTimeout(doPrint, 250);
-
-  // Write content (srcdoc-style via document.write so onload fires consistently)
-  const doc = iframe.contentWindow.document;
-  doc.open();
-  doc.write(html);
-  doc.close();
+  // If there's a logo (data URL), wait for it to decode so it isn't blank; else
+  // a short tick for layout. Then open the print dialog.
+  const logoImg = rootEl.querySelector(".logo img");
+  if (logoImg && !logoImg.complete) {
+    logoImg.onload = logoImg.onerror = () => setTimeout(fire, 80);
+    setTimeout(fire, 1500); // fallback if the image events never fire
+  } else {
+    setTimeout(fire, 150);
+  }
 }
 
 // ============================================================
