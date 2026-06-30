@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.06.30-5";
+const BUILD_VERSION = "2026.06.30-6";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -236,8 +236,8 @@ function printReceipt(order, shopInfo) {
   // Larger fonts + pure black + full width = crisp, dark thermal output that
   // fills the paper. No emoji/gray (thermal printers render those as garbage/faded).
   const F = is80
-    ? { base:16, shop:31, lao:15, meta:16, item:16, row:18, grand:27, foc:27, foot:14, pad:6, logo:150 }
-    : { base:13, shop:21, lao:12, meta:13, item:13, row:14, grand:20, foc:20, foot:12, pad:4, logo:110 };
+    ? { base:23, shop:42, lao:19, meta:23, item:23, row:26, grand:40, foc:34, foot:18, pad:2, logo:190 }
+    : { base:18, shop:31, lao:16, meta:18, item:18, row:21, grand:31, foc:27, foot:15, pad:2, logo:150 };
 
   const net = order.total - (order.discount || 0);
   const itemsHtml = order.items.map(it => {
@@ -263,7 +263,7 @@ function printReceipt(order, shopInfo) {
   // Remark / customer details — printed as a prominent boxed block (so the rider
   // can read the customer name, phone and address at a glance). Preserves line breaks.
   const remarkHtml = order.note
-    ? `<div class="remark"><div class="remark-h">📋 ໝາຍເຫດ / ລູກຄ້າ · Customer</div><div class="remark-b">${esc(order.note)}</div></div>`
+    ? `<div class="remark"><div class="remark-h">ໝາຍເຫດ / ລູກຄ້າ · Customer</div><div class="remark-b">${esc(order.note)}</div></div>`
     : "";
   // Optional shop logo, printed centered at the top (image/dialog mode only).
   const logoHtml = shopInfo.logo
@@ -297,8 +297,8 @@ function printReceipt(order, shopInfo) {
   #ppb-print-root .remark-b{font-weight:bold;font-size:${F.row}px;white-space:pre-wrap;word-break:break-word;line-height:1.45;}
   #ppb-print-root .row{display:flex;justify-content:space-between;margin:3px 0;font-size:${F.row}px;}
   #ppb-print-root .subtotal{border-top:1px dashed #000;padding-top:6px;margin-top:6px;}
-  #ppb-print-root .grand{font-size:${F.grand}px;font-weight:900;background:#000 !important;padding:7px 8px;margin-top:6px;}
-  #ppb-print-root .grand span{color:#fff !important;}
+  #ppb-print-root .grand{font-size:${F.grand}px;font-weight:900;border-top:3px solid #000;border-bottom:3px solid #000;padding:7px 0;margin-top:8px;}
+  #ppb-print-root .grand span{color:#000 !important;}
   #ppb-print-root .footer{text-align:center;font-size:${F.foot}px;font-weight:normal;padding:8px 0;border-top:1px dashed #000;margin-top:6px;}
   #ppb-print-root .foc{text-align:center;font-size:${F.foc}px;font-weight:900;border:2px solid #000;padding:6px;margin:6px 0;}`;
 
