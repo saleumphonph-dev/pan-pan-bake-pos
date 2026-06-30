@@ -6,6 +6,10 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // ============================================================
 // CONSTANTS
 // ============================================================
+// Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
+// build it is actually running. If the printed receipt is still wrong but this
+// version is current on the tablet, the problem is the print code, not caching.
+const BUILD_VERSION = "2026.06.30-4";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -276,7 +280,8 @@ function printReceipt(order, shopInfo) {
   @media print{
     html,body{margin:0 !important;padding:0 !important;background:#fff !important;}
     body > *{display:none !important;}
-    #ppb-print-root{display:block !important;}
+    #root{display:none !important;}
+    #ppb-print-root{display:block !important;position:static !important;}
   }
   #ppb-print-root{display:none;width:100%;font-family:'Courier New',monospace;font-weight:bold;font-size:${F.base}px;padding:${F.pad}px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   #ppb-print-root *{margin:0;padding:0;box-sizing:border-box;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
@@ -327,7 +332,7 @@ ${order.discount > 0 ? `<div class="row"><span>ສ່ວນຫຼຸດ / Discou
 ${order.payment === "cash" && order.received ? `
 <div class="row"><span>ຮັບເງິນ / Cash</span><span>${formatKip(order.received)}</span></div>
 <div class="row"><span>ເງິນທອນ / Change</span><span>${formatKip(order.received - net)}</span></div>` : ""}
-<div class="footer">${esc(shopInfo.footer)}</div>`;
+<div class="footer">${esc(shopInfo.footer)}<br><small>v${BUILD_VERSION}</small></div>`;
 
   // Inject a print stylesheet + the receipt into the MAIN document, print, then
   // remove them. Cleanup runs on afterprint (with a long fallback timer).
@@ -2020,9 +2025,22 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
                   ບໍ່ຈຳເປັນ uninstall/reinstall app ອີກຕໍ່ໄປ.<br/>
                   <span style={{ color:"#2563eb",fontWeight:600 }}>Clears PWA cache &amp; service workers. No need to uninstall &amp; reinstall app.</span>
                 </div>
-                <button onClick={()=>{if(window.confirm("Clear all PWA cache and refresh? You'll be back at the login screen.")){caches.keys().then(names=>Promise.all(names.map(n=>caches.delete(n))));navigator.serviceWorker.getRegistrations().then(regs=>regs.forEach(r=>r.unregister()));window.location.href=window.location.href.split("?")[0]+"?refresh="+Date.now();}}} style={{ padding:"10px 18px",background:"#2563eb",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>
+                <button onClick={async()=>{
+                  if(!window.confirm("Clear all PWA cache and refresh? You'll be back at the login screen."))return;
+                  // IMPORTANT: actually WAIT for cache-clear + SW unregister to finish
+                  // before reloading. The old code reloaded immediately (race), so the
+                  // tablet often kept serving the stale build.
+                  try{ if(window.caches){ const names=await caches.keys(); await Promise.all(names.map(n=>caches.delete(n))); } }catch(e){}
+                  try{ if(navigator.serviceWorker){ const regs=await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r=>r.unregister())); } }catch(e){}
+                  // Cache-bust the HTML so GitHub Pages serves the newest index.html.
+                  window.location.replace(window.location.pathname+"?v="+Date.now());
+                }} style={{ padding:"10px 18px",background:"#2563eb",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>
                   🔄 Force Refresh
                 </button>
+                <div style={{ marginTop:14,paddingTop:12,borderTop:"1px solid #e5e7eb",fontSize:13,color:"#374151" }}>
+                  ເວີຊັນ / Version: <span style={{ fontWeight:700,fontFamily:"monospace",color:"#111827" }}>{BUILD_VERSION}</span>
+                  <div style={{ fontSize:11,color:"#9ca3af",marginTop:2 }}>ຫຼັງ Force Refresh ໃຫ້ເຊັກວ່າເລກນີ້ກົງກັນທຸກເຄື່ອງ · After refresh, this number should match on every device.</div>
+                </div>
               </div>
             </>
           )}
