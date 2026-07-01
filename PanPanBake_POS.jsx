@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.01-2";
+const BUILD_VERSION = "2026.07.01-3";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -155,7 +155,12 @@ const stor = {
 // Printer configuration (saved in Admin → Printer). Defaults to 58mm thermal
 // via the Android print dialog, which the RawBT print service handles for
 // Bluetooth Xprinters while still rendering Lao text correctly (rasterized).
-const PRINTER_DEFAULT = { paperWidth: "80", mode: "dialog" };
+// printWidth = the on-screen pixel width the receipt is laid out at while printing.
+// The Android/RawBT print path rasterizes the screen ~1:1 to printer dots, so this
+// number controls how much of the paper the receipt fills. Tune per printer with
+// the Test Print button: lower = narrower (more margin), higher = wider (may clip).
+const PRINTER_DEFAULT = { paperWidth: "80", mode: "dialog", printWidth: 460 };
+const PRINT_WIDTH_MIN = 320, PRINT_WIDTH_MAX = 576, PRINT_WIDTH_STEP = 15;
 
 // Build a monospace plain-text receipt for RawBT "direct" mode (instant, no
 // dialog). Uses Latin labels because thermal printer fonts usually lack Lao
@@ -233,11 +238,11 @@ function printReceipt(order, shopInfo) {
   // to the Bluetooth Xprinter AND keeps Lao text (printed as a rasterized image). ──
   const is80 = cfg.paperWidth === "80";
   const W = is80 ? "80mm" : "58mm";
-  // During print we force the layout viewport to the printer's native dot width
-  // (80mm = 576 dots, 58mm = 384 dots) so the receipt maps ~1:1 to the paper and
-  // FILLS it edge-to-edge (otherwise it lays out at the wide tablet screen width
-  // and the printer scales it down, leaving a blank strip on the right).
-  const PRINT_VP = is80 ? 576 : 384;
+  // During print we force the layout viewport to a fixed pixel width so the
+  // receipt maps ~1:1 to the printer's dots and fills the paper. The exact value
+  // varies per printer, so it's a tunable setting (Admin → Printer → Print width).
+  const PRINT_VP = Math.min(PRINT_WIDTH_MAX, Math.max(PRINT_WIDTH_MIN,
+    Number(cfg.printWidth) || PRINTER_DEFAULT.printWidth));
   // Sizes are tuned for that fixed viewport. SIDE = even left/right margin (px).
   const F = is80
     ? { base:23, shop:40, lao:19, meta:23, item:23, row:26, grand:38, foc:34, foot:18, padY:14, side:20, logo:200 }
@@ -353,11 +358,14 @@ ${order.payment === "cash" && order.received ? `
   rootEl.innerHTML = bodyHtml;
   document.body.appendChild(rootEl);
 
-  const appRoot = document.getElementById("root");
-  const prevAppDisplay = appRoot ? appRoot.style.display : "";
+  // Hide EVERY on-screen layer (not just #root) so no modal, overlay or other
+  // element can be captured by the printer — only the receipt is visible. This is
+  // what makes POS-after-sale (receipt modal open), Test Print and History all
+  // print the same thing.
+  const hiddenEls = Array.from(document.body.children).filter(el => el.id !== "ppb-print-root");
+  const prevDisplays = hiddenEls.map(el => el.style.display);
   const prevScrollY = window.scrollY;
-  // Force the layout viewport to the printer's dot width so the receipt fills
-  // the paper, then restore it afterwards.
+  // Force the layout viewport to a fixed width so the receipt fills the paper.
   const vpMeta = document.querySelector('meta[name="viewport"]');
   const prevVp = vpMeta ? vpMeta.getAttribute("content") : null;
 
@@ -366,7 +374,7 @@ ${order.payment === "cash" && order.received ? `
     if (restored) return;
     restored = true;
     if (vpMeta && prevVp != null) vpMeta.setAttribute("content", prevVp); // restore viewport
-    if (appRoot) appRoot.style.display = prevAppDisplay; // bring the app back
+    hiddenEls.forEach((el, i) => { el.style.display = prevDisplays[i]; }); // bring the app back
     document.getElementById("ppb-print-style")?.remove();
     document.getElementById("ppb-print-root")?.remove();
     window.removeEventListener("afterprint", onAfter);
@@ -386,7 +394,7 @@ ${order.payment === "cash" && order.received ? `
     fired = true;
     // Narrow the viewport to the printer width so the receipt fills the paper.
     if (vpMeta) vpMeta.setAttribute("content", `width=${PRINT_VP}, initial-scale=1`);
-    if (appRoot) appRoot.style.display = "none"; // actually hide the app on screen
+    hiddenEls.forEach(el => { el.style.display = "none"; }); // hide all app layers on screen
     window.scrollTo(0, 0);
     // Force a reflow + two animation frames so the browser actually PAINTS the
     // receipt (app hidden, new viewport applied) before the print pipeline captures it.
@@ -2102,6 +2110,24 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
               </button>
             ))}
           </div>
+
+          {/* Print width tuner (image/Android Print mode) */}
+          {(() => {
+            const pw = Math.min(PRINT_WIDTH_MAX, Math.max(PRINT_WIDTH_MIN, Number(printerCfg.printWidth) || PRINTER_DEFAULT.printWidth));
+            const setPw = (v) => savePrinter({ printWidth: Math.min(PRINT_WIDTH_MAX, Math.max(PRINT_WIDTH_MIN, v)) });
+            return (
+              <div style={{ marginBottom:20 }}>
+                <div style={{ fontSize:13,fontWeight:600,marginBottom:4 }}>↔️ ຄວາມກວ້າງການພິມ / Print width <span style={{ fontWeight:400,color:"#9ca3af" }}>(Android Print)</span></div>
+                <div style={{ fontSize:11,color:"#6b7280",marginBottom:10,lineHeight:1.6 }}>ປັບໃຫ້ໃບບິນເຕັມໜ້າເຈ້ຍ ແລ້ວກົດ ທົດສອບພິມ · Adjust so the receipt fills the paper, then Test Print. ໜ້ອຍ=ແຄບ / Lower=narrower, ຫຼາຍ=ກວ້າງ(ອາດຕັດ) / Higher=wider (may clip).</div>
+                <div style={{ display:"flex",alignItems:"center",gap:10 }}>
+                  <button onClick={()=>setPw(pw - PRINT_WIDTH_STEP)} style={{ width:46,height:46,borderRadius:10,border:"1px solid #e5e7eb",background:"#fff",fontSize:22,fontWeight:700,cursor:"pointer" }}>−</button>
+                  <div style={{ flex:1,textAlign:"center",padding:"10px 0",borderRadius:10,background:"#f3f4f6",fontWeight:700,fontSize:18,fontFamily:"monospace" }}>{pw}px</div>
+                  <button onClick={()=>setPw(pw + PRINT_WIDTH_STEP)} style={{ width:46,height:46,borderRadius:10,border:"1px solid #e5e7eb",background:"#fff",fontSize:22,fontWeight:700,cursor:"pointer" }}>＋</button>
+                  <button onClick={()=>setPw(PRINTER_DEFAULT.printWidth)} title="Reset" style={{ padding:"0 12px",height:46,borderRadius:10,border:"1px solid #e5e7eb",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",color:"#6b7280" }}>↺</button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Test print */}
           <button onClick={testPrint} style={{ width:"100%",padding:14,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:20 }}>
