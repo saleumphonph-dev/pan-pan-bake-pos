@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.01-6";
+const BUILD_VERSION = "2026.07.01-7";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -781,14 +781,29 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
   const [showParkedList, setShowParkedList] = useState(false);
   const [showCartMobile, setShowCartMobile] = useState(false); // Mobile cart modal state
 
-  useEffect(() => { if (!categories.find(c=>c.id===cat)) setCat(categories[0]?.id); }, [categories]);
+  // Menu grid density (bigger card = fewer per row, larger photo). Persisted.
+  const MENU_SIZES = [120, 148, 172, 202, 236]; // min card width (px)
+  const [sizeIdx, setSizeIdx] = useState(() => {
+    const v = stor.get("menuSizeIdx", 1);
+    return Math.max(0, Math.min(MENU_SIZES.length - 1, v));
+  });
+  const setIdx = (i) => { const n = Math.max(0, Math.min(MENU_SIZES.length - 1, i)); setSizeIdx(n); stor.set("menuSizeIdx", n); };
+  const cardMin = MENU_SIZES[sizeIdx];
+  const imgH = Math.round(cardMin * 0.74); // photo height scales with the card
+
+  useEffect(() => { if (cat !== "__popular__" && !categories.find(c=>c.id===cat)) setCat(categories[0]?.id); }, [categories]);
 
   // Persist the in-progress order so it isn't lost on tab switch or refresh.
   useEffect(() => {
     stor.set("orderDraft", { cart, discount, note, parkedId, parkedName });
   }, [cart, discount, note, parkedId, parkedName]);
 
-  const filtered = menu.filter(m => m.cat===cat && (search==="" || m.name.toLowerCase().includes(search.toLowerCase()) || m.nameLao.includes(search)));
+  const matchSearch = (m) => search==="" || m.name.toLowerCase().includes(search.toLowerCase()) || m.nameLao.includes(search);
+  const filtered = menu
+    .filter(m => (cat==="__popular__" ? m.popular : m.cat===cat) && matchSearch(m))
+    // best-sellers (🔥 ຂາຍດີ) float to the top within any view
+    .sort((a,b) => (b.popular?1:0) - (a.popular?1:0));
+  const popularCount = menu.filter(m => m.popular).length;
 
   const onMenuClick = (item) => {
     // All drinks → show modal (sweetness level, plus add-ons for coffee/matcha)
@@ -921,7 +936,14 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
             <button onClick={clearCart} style={{ padding:"4px 10px",background:"#fff",color:"#9a3412",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>ຍົກເລີກ</button>
           </div>
         )}
-        <div style={{ display:"flex",background:"#1a1a2e",padding:"0 8px 8px",gap:6,overflowX:"auto",flexShrink:0,flexWrap:"wrap" }}>
+        <div style={{ display:"flex",background:"#1a1a2e",padding:"0 8px 8px",gap:6,overflowX:"auto",flexShrink:0,flexWrap:"wrap",alignItems:"center" }}>
+          {popularCount > 0 && (
+            <button onClick={()=>setCat("__popular__")} style={{
+              padding:"8px 14px",borderRadius:20,border:"none",cursor:"pointer",
+              background:cat==="__popular__"?"#f4d03f":"rgba(244,208,63,0.18)",
+              color:cat==="__popular__"?"#1a1a2e":"#f4d03f",fontWeight:700,fontSize:13,whiteSpace:"nowrap"
+            }}>🔥 ຂາຍດີ</button>
+          )}
           {categories.map(c => (
             <button key={c.id} onClick={()=>setCat(c.id)} style={{
               padding:"8px 14px",borderRadius:20,border:"none",cursor:"pointer",
@@ -929,8 +951,20 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
               color:cat===c.id?"#1a1a2e":"#e5e7eb",fontWeight:cat===c.id?700:500,fontSize:13,whiteSpace:"nowrap"
             }}>{c.label}{ADDON_CATEGORIES.includes(c.id) && " ✨"}</button>
           ))}
+          {/* Menu photo size: −/+ (zoom out = more per row, zoom in = bigger photos) */}
+          <div style={{ marginLeft:"auto",display:"flex",alignItems:"center",gap:4,paddingLeft:8 }}>
+            <span style={{ fontSize:11,color:"#9ca3af",whiteSpace:"nowrap" }}>ຂະໜາດ</span>
+            <button onClick={()=>setIdx(sizeIdx-1)} disabled={sizeIdx<=0} title="ນ້ອຍລົງ / smaller" style={{
+              width:30,height:30,borderRadius:8,border:"none",cursor:sizeIdx<=0?"default":"pointer",
+              background:sizeIdx<=0?"rgba(255,255,255,0.06)":"rgba(255,255,255,0.15)",color:"#fff",fontSize:18,fontWeight:700,lineHeight:1,padding:0
+            }}>−</button>
+            <button onClick={()=>setIdx(sizeIdx+1)} disabled={sizeIdx>=MENU_SIZES.length-1} title="ໃຫຍ່ຂຶ້ນ / larger" style={{
+              width:30,height:30,borderRadius:8,border:"none",cursor:sizeIdx>=MENU_SIZES.length-1?"default":"pointer",
+              background:sizeIdx>=MENU_SIZES.length-1?"rgba(255,255,255,0.06)":"rgba(255,255,255,0.15)",color:"#fff",fontSize:18,fontWeight:700,lineHeight:1,padding:0
+            }}>＋</button>
+          </div>
         </div>
-        <div className="grid-responsive products" style={{ gap:10,padding:14,flex:1,display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(148px,1fr))" }}>
+        <div className="grid-responsive products" style={{ gap:10,padding:14,flex:1,display:"grid",gridTemplateColumns:`repeat(auto-fill,minmax(${cardMin}px,1fr))` }}>
           {filtered.map(item => {
             const hasAddons = ADDON_CATEGORIES.includes(item.cat) && addons.length > 0;
             return (
@@ -942,8 +976,8 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
                 {item.popular && <span style={{ position:"absolute",top:6,right:6,background:"#f4d03f",color:"#1a1a2e",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4,zIndex:1 }}>🔥</span>}
                 {hasAddons && <span style={{ position:"absolute",top:6,left:6,background:"#ede9fe",color:"#7c3aed",fontSize:9,fontWeight:700,padding:"2px 5px",borderRadius:4,zIndex:1 }}>✨</span>}
                 {item.image
-                  ? <img src={item.image} alt={item.name} style={{ width:"100%",height:110,objectFit:"cover",display:"block",flexShrink:0 }} />
-                  : <div style={{ width:"100%",height:110,display:"flex",alignItems:"center",justifyContent:"center",background:"#f9fafb",fontSize:52,flexShrink:0 }}>{item.emoji}</div>}
+                  ? <img src={item.image} alt={item.name} style={{ width:"100%",height:imgH,objectFit:"cover",display:"block",flexShrink:0 }} />
+                  : <div style={{ width:"100%",height:imgH,display:"flex",alignItems:"center",justifyContent:"center",background:"#f9fafb",fontSize:Math.round(imgH*0.48),flexShrink:0 }}>{item.emoji}</div>}
                 <div style={{ padding:"8px 8px 10px",display:"flex",flexDirection:"column",gap:2 }}>
                   <div style={{ fontSize:12,fontWeight:600,color:"#1a1a2e",lineHeight:1.3 }}>{item.name}</div>
                   <div style={{ fontSize:11,color:"#6b7280" }}>{item.nameLao}</div>
