@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.01-7";
+const BUILD_VERSION = "2026.07.01-8";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -251,17 +251,16 @@ function printReceipt(order, shopInfo) {
     const addonText = (it.addons || []).map(a => `+ ${a.nameLao} (${formatKip(a.price)})`).join("<br>");
     const sweetText = it.sweetness ? sweetLabel(it.sweetness).replace(/^[^\s]+\s/, "") : ""; // drop leading emoji
     const unit = itemPrice(it);
+    // English name on top (larger); Lao name + unit×qty inline underneath (smaller).
     return `<tr>
-      <td style="padding:4px 0">${it.name}<br><small>${it.nameLao}</small>${sweetText ? `<br><small>${sweetText}</small>` : ""}${addonText ? `<br><small>${addonText}</small>` : ""}</td>
-      <td style="text-align:center;padding:4px 0;white-space:nowrap">${formatKip(unit)}<br><small>× ${it.qty}</small></td>
-      <td style="text-align:right;padding:4px 0;white-space:nowrap">${formatKip(unit * it.qty)}</td>
+      <td style="padding:4px 0"><span class="iname">${it.name}</span><br><small>${it.nameLao} [${formatKip(unit)} × ${it.qty}]</small>${sweetText ? `<br><small>${sweetText}</small>` : ""}${addonText ? `<br><small>${addonText}</small>` : ""}</td>
+      <td style="text-align:right;padding:4px 0;vertical-align:top;white-space:nowrap">${formatKip(unit * it.qty)}</td>
     </tr>`;
   }).join("");
-  // Column header so the unit price, quantity and amount are clearly labelled.
+  // Two-column header: item name | amount (unit price/qty now sits inline per item).
   const itemsHeader = `<tr class="ihead">
-      <td style="padding:2px 0">ລາຍການ<br><small>Item</small></td>
-      <td style="text-align:center;padding:2px 0">ລາຄາ/ໜ່ວຍ<br><small>Unit × Qty</small></td>
-      <td style="text-align:right;padding:2px 0">ລວມ<br><small>Amount</small></td>
+      <td style="padding:2px 0">ລາຍການ / Item</td>
+      <td style="text-align:right;padding:2px 0">ລວມ / Amount</td>
     </tr>`;
 
   const payLabel = order.payment === "cash" ? "ເງິນສົດ" : order.payment === "qr" ? "QR Code" : order.payment === "transfer" ? "ໂອນ" : "FOC";
@@ -270,7 +269,7 @@ function printReceipt(order, shopInfo) {
   // Remark / customer details — printed as a prominent boxed block (so the rider
   // can read the customer name, phone and address at a glance). Preserves line breaks.
   const remarkHtml = order.note
-    ? `<div class="remark"><div class="remark-h">ໝາຍເຫດ / ລູກຄ້າ · Customer</div><div class="remark-b">${esc(order.note)}</div></div>`
+    ? `<div class="remark"><div class="remark-h">ລູກຄ້າ · Customer</div><div class="remark-b">${esc(order.note)}</div></div>`
     : "";
   // Optional shop logo, printed centered at the top (image/dialog mode only).
   const logoHtml = shopInfo.logo
@@ -300,6 +299,7 @@ function printReceipt(order, shopInfo) {
   #ppb-print-root .meta td:last-child{text-align:right;}
   #ppb-print-root .items{width:100%;border-collapse:collapse;padding:8px 0;}
   #ppb-print-root .items td{font-size:${F.item}px;vertical-align:top;}
+  #ppb-print-root .items .iname{font-size:${F.item + 4}px;}
   #ppb-print-root .items tr.ihead td{border-bottom:1px solid #000;padding-bottom:3px;}
   #ppb-print-root .divider{border-top:1px dashed #000;margin:6px 0;}
   #ppb-print-root .remark{padding:8px 10px;margin:6px 0;border:2px solid #000;}
