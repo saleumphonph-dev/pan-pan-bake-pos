@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.01-3";
+const BUILD_VERSION = "2026.07.01-4";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -155,12 +155,13 @@ const stor = {
 // Printer configuration (saved in Admin → Printer). Defaults to 58mm thermal
 // via the Android print dialog, which the RawBT print service handles for
 // Bluetooth Xprinters while still rendering Lao text correctly (rasterized).
-// printWidth = the on-screen pixel width the receipt is laid out at while printing.
-// The Android/RawBT print path rasterizes the screen ~1:1 to printer dots, so this
-// number controls how much of the paper the receipt fills. Tune per printer with
-// the Test Print button: lower = narrower (more margin), higher = wider (may clip).
-const PRINTER_DEFAULT = { paperWidth: "80", mode: "dialog", printWidth: 460 };
-const PRINT_WIDTH_MIN = 320, PRINT_WIDTH_MAX = 576, PRINT_WIDTH_STEP = 15;
+// printWidth = the FIXED pixel width the receipt is rendered at while printing.
+// The Android/RawBT print path maps roughly a ~360px-wide page to the full paper
+// (the on-screen receipt popup, capped at 360px, prints edge-to-edge), so a wider
+// receipt gets clipped. Give it a fixed width instead and tune per printer with
+// Test Print: lower = narrower (more margin), higher = wider (too high clips).
+const PRINTER_DEFAULT = { paperWidth: "80", mode: "dialog", printWidth: 360 };
+const PRINT_WIDTH_MIN = 280, PRINT_WIDTH_MAX = 460, PRINT_WIDTH_STEP = 12;
 
 // Build a monospace plain-text receipt for RawBT "direct" mode (instant, no
 // dialog). Uses Latin labels because thermal printer fonts usually lack Lao
@@ -238,15 +239,12 @@ function printReceipt(order, shopInfo) {
   // to the Bluetooth Xprinter AND keeps Lao text (printed as a rasterized image). ──
   const is80 = cfg.paperWidth === "80";
   const W = is80 ? "80mm" : "58mm";
-  // During print we force the layout viewport to a fixed pixel width so the
-  // receipt maps ~1:1 to the printer's dots and fills the paper. The exact value
-  // varies per printer, so it's a tunable setting (Admin → Printer → Print width).
-  const PRINT_VP = Math.min(PRINT_WIDTH_MAX, Math.max(PRINT_WIDTH_MIN,
+  // The receipt is rendered at this FIXED pixel width (the print path maps roughly
+  // a ~360px page to the full paper). Tunable per printer via Admin → Printer.
+  const PW = Math.min(PRINT_WIDTH_MAX, Math.max(PRINT_WIDTH_MIN,
     Number(cfg.printWidth) || PRINTER_DEFAULT.printWidth));
-  // Sizes are tuned for that fixed viewport. SIDE = even left/right margin (px).
-  const F = is80
-    ? { base:23, shop:40, lao:19, meta:23, item:23, row:26, grand:38, foc:34, foot:18, padY:14, side:20, logo:200 }
-    : { base:20, shop:32, lao:16, meta:20, item:20, row:22, grand:32, foc:28, foot:15, padY:10, side:14, logo:150 };
+  // Fonts tuned for the ~360px width. SIDE = even left/right margin (px).
+  const F = { base:16, shop:24, lao:12, meta:16, item:16, row:17, grand:25, foc:22, foot:11, padY:10, side:12, logo:130 };
 
   const net = order.total - (order.discount || 0);
   const itemsHtml = order.items.map(it => {
@@ -289,7 +287,7 @@ function printReceipt(order, shopInfo) {
   // Emphasis comes from font SIZE and borders, not weight.
   const css = `
   @page{margin:0;size:${W} auto;}
-  #ppb-print-root{display:block;width:100%;font-family:'Courier New',monospace;font-weight:normal;font-size:${F.base}px;padding:${F.padY}px ${F.side}px ${F.padY + 10}px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  #ppb-print-root{display:block;width:${PW}px;max-width:${PW}px;margin:0 auto;font-family:'Courier New',monospace;font-weight:normal;font-size:${F.base}px;padding:${F.padY}px ${F.side}px ${F.padY + 10}px;color:#000;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   #ppb-print-root *{margin:0;padding:0;box-sizing:border-box;color:#000;font-weight:normal;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   #ppb-print-root small{font-size:${F.lao}px;}
   #ppb-print-root .logo{text-align:center;padding:4px 0 2px;}
@@ -358,23 +356,18 @@ ${order.payment === "cash" && order.received ? `
   rootEl.innerHTML = bodyHtml;
   document.body.appendChild(rootEl);
 
-  // Hide EVERY on-screen layer (not just #root) so no modal, overlay or other
-  // element can be captured by the printer — only the receipt is visible. This is
-  // what makes POS-after-sale (receipt modal open), Test Print and History all
-  // print the same thing.
-  const hiddenEls = Array.from(document.body.children).filter(el => el.id !== "ppb-print-root");
-  const prevDisplays = hiddenEls.map(el => el.style.display);
   const prevScrollY = window.scrollY;
-  // Force the layout viewport to a fixed width so the receipt fills the paper.
-  const vpMeta = document.querySelector('meta[name="viewport"]');
-  const prevVp = vpMeta ? vpMeta.getAttribute("content") : null;
+  // Track which elements we hid so we can restore exactly them. We re-query the
+  // body's children at print time (below) rather than now, because a React
+  // re-render (e.g. saving the remark) can add/replace nodes in between — this is
+  // why the POS after-sale popup used to sneak into the printout.
+  const hidden = []; // { el, prev }
 
   let restored = false;
   const restore = () => {
     if (restored) return;
     restored = true;
-    if (vpMeta && prevVp != null) vpMeta.setAttribute("content", prevVp); // restore viewport
-    hiddenEls.forEach((el, i) => { el.style.display = prevDisplays[i]; }); // bring the app back
+    hidden.forEach(({ el, prev }) => { el.style.display = prev; }); // bring the app back
     document.getElementById("ppb-print-style")?.remove();
     document.getElementById("ppb-print-root")?.remove();
     window.removeEventListener("afterprint", onAfter);
@@ -392,12 +385,17 @@ ${order.payment === "cash" && order.received ? `
   const fire = () => {
     if (fired) return;
     fired = true;
-    // Narrow the viewport to the printer width so the receipt fills the paper.
-    if (vpMeta) vpMeta.setAttribute("content", `width=${PRINT_VP}, initial-scale=1`);
-    hiddenEls.forEach(el => { el.style.display = "none"; }); // hide all app layers on screen
+    // Hide EVERY on-screen layer except the receipt, re-queried NOW so anything a
+    // re-render added (modals, banners, portals) is also hidden. Only the receipt
+    // is left visible for the printer to capture.
+    Array.from(document.body.children).forEach(el => {
+      if (el.id === "ppb-print-root") return;
+      hidden.push({ el, prev: el.style.display });
+      el.style.display = "none";
+    });
     window.scrollTo(0, 0);
     // Force a reflow + two animation frames so the browser actually PAINTS the
-    // receipt (app hidden, new viewport applied) before the print pipeline captures it.
+    // receipt (everything else hidden) before the print pipeline captures it.
     void document.body.offsetHeight;
     requestAnimationFrame(() => requestAnimationFrame(() => {
       try { window.print(); }
