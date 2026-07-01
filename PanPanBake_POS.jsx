@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.01-8";
+const BUILD_VERSION = "2026.07.01-9";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1710,6 +1710,7 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
   const [search,setSearch]=useState("");
   const [dateFrom,setDateFrom]=useState("");
   const [dateTo,setDateTo]=useState("");
+  const [statusFilter,setStatusFilter]=useState("all");
   const [voidTarget,setVoidTarget]=useState(null);
   const voidOrder=(order,reason)=>{
     const voidedOrder={...order,voided:true,voidReason:reason,voidedAt:new Date().toISOString()};
@@ -1717,10 +1718,21 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
     setSales(updated); stor.set("sales",updated); syncOrder(voidedOrder); setVoidTarget(null);
   };
 
+  const passStatus=(s)=>{
+    if(statusFilter==="all")return true;
+    if(statusFilter==="void")return s.voided;
+    return s.payment===statusFilter; // cash / qr / transfer / foc
+  };
+
   const filtered=sales.filter(s=>{
-    // Text search: bill ID or item name
-    const matchesSearch=search===""||s.id.includes(search)||s.items.some(i=>i.name.toLowerCase().includes(search.toLowerCase()));
+    // Text search: bill ID, item name (EN/Lao), or the customer remark (note)
+    const q=search.trim().toLowerCase();
+    const matchesSearch=q===""
+      ||s.id.toLowerCase().includes(q)
+      ||(s.note||"").toLowerCase().includes(q)
+      ||s.items.some(i=>i.name.toLowerCase().includes(q)||(i.nameLao||"").includes(search.trim()));
     if(!matchesSearch)return false;
+    if(!passStatus(s))return false;
 
     // Date range filter
     if(dateFrom||dateTo){
@@ -1731,6 +1743,8 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
     return true;
   }).slice().reverse().slice(0,150);
 
+  const STATUS_CHIPS=[["all","ທັງໝົດ"],["cash","💵 ສົດ"],["qr","📲 QR"],["transfer","🏦 ໂອນ"],["foc","🎁 FOC"],["void","🚫 ຍົກເລີກ"]];
+
   return (
     <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16 }}>
@@ -1739,7 +1753,7 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
 
       {/* Search & Date Filters */}
       <div style={{ display:"flex",gap:8,alignItems:"center",marginBottom:20,flexWrap:"wrap" }}>
-        <input placeholder="ຄົ້ນຫາບິນ/ສິນຄ້າ..." value={search} onChange={e=>setSearch(e.target.value)} style={{ padding:"8px 14px",borderRadius:20,border:"1px solid #e5e7eb",fontSize:13,flex:1,minWidth:200 }} />
+        <input placeholder="🔍 ຄົ້ນຫາ ບິນ / ສິນຄ້າ / ຊື່ລູກຄ້າ..." value={search} onChange={e=>setSearch(e.target.value)} style={{ padding:"8px 14px",borderRadius:20,border:"1px solid #e5e7eb",fontSize:13,flex:1,minWidth:200 }} />
         <div style={{ display:"flex",gap:6,alignItems:"center",flexWrap:"wrap" }}>
           <label style={{ fontSize:12,color:"#6b7280",whiteSpace:"nowrap" }}>ວັນທີ່ເລີ່ມ:</label>
           <input type="date" value={dateFrom} onChange={e=>setDateFrom(e.target.value)} style={{ padding:"6px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:12 }} />
@@ -1747,6 +1761,17 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
           <input type="date" value={dateTo} onChange={e=>setDateTo(e.target.value)} style={{ padding:"6px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:12 }} />
           {(dateFrom||dateTo)&&<button onClick={()=>{setDateFrom("");setDateTo("");}} style={{ padding:"6px 10px",borderRadius:8,border:"1px solid #e5e7eb",background:"#fee2e2",color:"#dc2626",cursor:"pointer",fontSize:11,fontWeight:600 }}>ລຶບກັ່ນ</button>}
         </div>
+      </div>
+
+      {/* Status filter chips */}
+      <div style={{ display:"flex",gap:6,marginBottom:16,flexWrap:"wrap" }}>
+        {STATUS_CHIPS.map(([v,l])=>(
+          <button key={v} onClick={()=>setStatusFilter(v)} style={{
+            padding:"6px 12px",borderRadius:20,border:"none",cursor:"pointer",fontSize:12,fontWeight:statusFilter===v?700:500,whiteSpace:"nowrap",
+            background:statusFilter===v?"#1a1a2e":"#fff",color:statusFilter===v?"#f4d03f":"#374151"
+          }}>{l}</button>
+        ))}
+        <div style={{ marginLeft:"auto",fontSize:12,color:"#6b7280",alignSelf:"center" }}>ພົບ {filtered.length} ໃບ</div>
       </div>
       <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden" }}>
         {filtered.length===0?<div style={{ padding:40,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີ</div>:filtered.map((s,i)=>{
@@ -1767,7 +1792,8 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
                 <div style={{ fontSize:11,color:"#9ca3af",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
                   {s.items.map(it=>`${it.emoji}${it.name}×${it.qty}${(it.addons||[]).length>0?` (+${it.addons.length})`:""}`).join(" · ")}
                 </div>
-                {(s.note||s.voidReason)&&<div style={{ fontSize:11,color:"#6b7280" }}>📝 {s.voidReason||s.note}</div>}
+                {s.note&&<div style={{ fontSize:11,color:"#374151",fontWeight:600,whiteSpace:"pre-wrap",wordBreak:"break-word" }}>📝 {s.note}</div>}
+                {s.voidReason&&<div style={{ fontSize:11,color:"#dc2626" }}>🚫 ເຫດຜົນ: {s.voidReason}</div>}
               </div>
               <div style={{ textAlign:"right",flexShrink:0 }}>
                 <div style={{ fontSize:14,fontWeight:700,color:isVoid?"#9ca3af":isFOC?"#16a34a":"#7c3aed" }}>{isVoid?"—":isFOC?"FOC":formatKip(net)}</div>
