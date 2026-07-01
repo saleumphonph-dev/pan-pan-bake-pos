@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.01-5";
+const BUILD_VERSION = "2026.07.01-6";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -357,11 +357,20 @@ ${order.payment === "cash" && order.received ? `
   document.body.appendChild(rootEl);
 
   const prevScrollY = window.scrollY;
-  // Track which elements we hid so we can restore exactly them. We re-query the
-  // body's children at print time (below) rather than now, because a React
-  // re-render (e.g. saving the remark) can add/replace nodes in between — this is
-  // why the POS after-sale popup used to sneak into the printout.
+  // Hide every on-screen layer except the receipt. We hide immediately (so the app
+  // is never briefly captured) AND again at print time (to catch anything a React
+  // re-render added, e.g. saving the remark) — hiddenSet stops double-hiding.
   const hidden = []; // { el, prev }
+  const hiddenSet = new Set();
+  const hideAll = () => {
+    Array.from(document.body.children).forEach(el => {
+      if (el.id === "ppb-print-root" || hiddenSet.has(el)) return;
+      hidden.push({ el, prev: el.style.display });
+      hiddenSet.add(el);
+      el.style.display = "none";
+    });
+  };
+  hideAll(); // hide the app right now, before the print dialog can capture it
 
   const printStart = { t: 0 };
   let restored = false;
@@ -397,14 +406,7 @@ ${order.payment === "cash" && order.received ? `
   const fire = () => {
     if (fired) return;
     fired = true;
-    // Hide EVERY on-screen layer except the receipt, re-queried NOW so anything a
-    // re-render added (modals, banners, portals) is also hidden. Only the receipt
-    // is left visible for the printer to capture.
-    Array.from(document.body.children).forEach(el => {
-      if (el.id === "ppb-print-root") return;
-      hidden.push({ el, prev: el.style.display });
-      el.style.display = "none";
-    });
+    hideAll(); // re-hide in case a re-render added a new layer since we first hid
     window.scrollTo(0, 0);
     // Force a reflow + two animation frames so the browser actually PAINTS the
     // receipt (everything else hidden) before the print pipeline captures it.
@@ -672,8 +674,8 @@ function VoidModal({ order, shopInfo, onVoid, onClose }) {
         <div style={{ display:"flex",flexDirection:"column",gap:8 }}>
           <button onClick={()=>{if(!reason)return alert("ກະລຸນາໃສ່ເຫດຜົນ");onVoid(reason);}} style={{ padding:12,background:"#dc2626",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer" }}>🚫 ຍົກເລີກໃບບິນ</button>
           <div style={{ display:"flex",gap:8 }}>
-            <button onClick={()=>printReceipt(order,shopInfo)} style={{ flex:1,padding:10,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13 }}>🖨️ ພິມຄືນ</button>
-            <button onClick={()=>printReceipt({...order,voidReason:reason||"Voided"},shopInfo)} style={{ flex:1,padding:10,background:"#ea580c",color:"#fff",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13 }}>📄 Void Receipt</button>
+            <button onClick={()=>setTimeout(()=>printReceipt(order,shopInfo),50)} style={{ flex:1,padding:10,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13 }}>🖨️ ພິມຄືນ</button>
+            <button onClick={()=>setTimeout(()=>printReceipt({...order,voidReason:reason||"Voided"},shopInfo),50)} style={{ flex:1,padding:10,background:"#ea580c",color:"#fff",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer",fontSize:13 }}>📄 Void Receipt</button>
           </div>
           <button onClick={onClose} style={{ padding:10,background:"#f3f4f6",border:"none",borderRadius:10,cursor:"pointer",fontSize:13 }}>ປິດ</button>
         </div>
@@ -1738,7 +1740,7 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
                 <div style={{ fontSize:11,color:"#6b7280" }}>{s.payment==="cash"?"ສົດ":s.payment==="qr"?"QR":s.payment==="transfer"?"ໂອນ":"FOC"}</div>
               </div>
               <div style={{ display:"flex",gap:4 }}>
-                <button onClick={()=>printReceipt(s,shopInfo)} title="ພິມ" style={{ padding:"5px 8px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>🖨️</button>
+                <button onClick={()=>setTimeout(()=>printReceipt(s,shopInfo),50)} title="ພິມ" style={{ padding:"5px 8px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>🖨️</button>
                 {!isVoid&&<button onClick={()=>setVoidTarget(s)} title="ຍົກເລີກ" style={{ padding:"5px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>⚠️</button>}
               </div>
             </div>
@@ -1771,11 +1773,14 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
 
   const savePrinter=(patch)=>{ const next={...stor.get("printerConfig",PRINTER_DEFAULT),...patch}; setPrinterCfg(next); stor.set("printerConfig",next); };
   const testPrint=()=>{
-    printReceipt({
+    // Defer out of the click handler so the print setup runs on a clean tick
+    // (matches the working POS path; avoids capturing the Admin screen).
+    const order={
       id:"test01", date:new Date().toISOString(), cashier:ROLES[role]?.label||"—",
       payment:"cash", received:50000, discount:0, total:30000,
       items:[{emoji:"🥐",name:"Croissant",nameLao:"ຄວາຊ໊ອງ",price:15000,qty:2,addons:[]}],
-    }, shopInfo);
+    };
+    setTimeout(()=>printReceipt(order, shopInfo), 50);
   };
 
   const handleImg=(e,target)=>{
@@ -2135,8 +2140,8 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             const setPw = (v) => savePrinter({ printWidth: Math.min(PRINT_WIDTH_MAX, Math.max(PRINT_WIDTH_MIN, v)) });
             return (
               <div style={{ marginBottom:20 }}>
-                <div style={{ fontSize:13,fontWeight:600,marginBottom:4 }}>↔️ ຄວາມກວ້າງການພິມ / Print width <span style={{ fontWeight:400,color:"#9ca3af" }}>(Android Print)</span></div>
-                <div style={{ fontSize:11,color:"#6b7280",marginBottom:10,lineHeight:1.6 }}>ປັບໃຫ້ໃບບິນເຕັມໜ້າເຈ້ຍ ແລ້ວກົດ ທົດສອບພິມ · Adjust so the receipt fills the paper, then Test Print. ໜ້ອຍ=ແຄບ / Lower=narrower, ຫຼາຍ=ກວ້າງ(ອາດຕັດ) / Higher=wider (may clip).</div>
+                <div style={{ fontSize:13,fontWeight:600,marginBottom:4 }}>🔠 ຂະໜາດຕົວອັກສອນ / Text size <span style={{ fontWeight:400,color:"#9ca3af" }}>(Android Print)</span></div>
+                <div style={{ fontSize:11,color:"#6b7280",marginBottom:10,lineHeight:1.6 }}>ໜ້ອຍ = ຕົວອັກສອນໃຫຍ່ / Lower = bigger text · ຫຼາຍ = ຕົວອັກສອນນ້ອຍ / Higher = smaller text. <b>ໝາຍເຫດ:</b> ຄວາມກວ້າງເຕັມໜ້າເຈ້ຍ ຕັ້ງຢູ່ RawBT (Paper width = 80mm). Paper fill is set in RawBT, not here.</div>
                 <div style={{ display:"flex",alignItems:"center",gap:10 }}>
                   <button onClick={()=>setPw(pw - PRINT_WIDTH_STEP)} style={{ width:46,height:46,borderRadius:10,border:"1px solid #e5e7eb",background:"#fff",fontSize:22,fontWeight:700,cursor:"pointer" }}>−</button>
                   <div style={{ flex:1,textAlign:"center",padding:"10px 0",borderRadius:10,background:"#f3f4f6",fontWeight:700,fontSize:18,fontFamily:"monospace" }}>{pw}px</div>
