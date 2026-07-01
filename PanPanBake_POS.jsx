@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.01-4";
+const BUILD_VERSION = "2026.07.01-5";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -160,8 +160,8 @@ const stor = {
 // (the on-screen receipt popup, capped at 360px, prints edge-to-edge), so a wider
 // receipt gets clipped. Give it a fixed width instead and tune per printer with
 // Test Print: lower = narrower (more margin), higher = wider (too high clips).
-const PRINTER_DEFAULT = { paperWidth: "80", mode: "dialog", printWidth: 360 };
-const PRINT_WIDTH_MIN = 280, PRINT_WIDTH_MAX = 460, PRINT_WIDTH_STEP = 12;
+const PRINTER_DEFAULT = { paperWidth: "80", mode: "dialog", printWidth: 384 };
+const PRINT_WIDTH_MIN = 320, PRINT_WIDTH_MAX = 560, PRINT_WIDTH_STEP = 16;
 
 // Build a monospace plain-text receipt for RawBT "direct" mode (instant, no
 // dialog). Uses Latin labels because thermal printer fonts usually lack Lao
@@ -363,6 +363,7 @@ ${order.payment === "cash" && order.received ? `
   // why the POS after-sale popup used to sneak into the printout.
   const hidden = []; // { el, prev }
 
+  const printStart = { t: 0 };
   let restored = false;
   const restore = () => {
     if (restored) return;
@@ -370,16 +371,27 @@ ${order.payment === "cash" && order.received ? `
     hidden.forEach(({ el, prev }) => { el.style.display = prev; }); // bring the app back
     document.getElementById("ppb-print-style")?.remove();
     document.getElementById("ppb-print-root")?.remove();
-    window.removeEventListener("afterprint", onAfter);
+    window.removeEventListener("afterprint", guardedRestore);
+    window.removeEventListener("focus", guardedRestore);
+    document.removeEventListener("visibilitychange", onVis);
     window.scrollTo(0, prevScrollY);
   };
-  // IMPORTANT: Do NOT restore on focus/visibilitychange. On Android, opening the
-  // print sheet fires those immediately, which used to bring the app/modal back
-  // BEFORE the printer captured the screen — so it printed the modal instead of
-  // the receipt. Restore only on afterprint (with a delay so the async capture
-  // finishes first) plus a long fallback so the app is never stuck hidden.
-  const onAfter = () => setTimeout(restore, 2000);
-  window.addEventListener("afterprint", onAfter);
+  // CRITICAL: the receipt must stay on screen for the ENTIRE time the Android
+  // print dialog is open. That dialog RE-CAPTURES the page whenever the user
+  // changes a setting (paper size, colour, etc.); if we restore the app too early,
+  // the re-capture grabs the app/popup instead of the receipt (exactly the bug
+  // seen: first preview correct, then it flips to the popup after a setting change).
+  //
+  // So restore only when the dialog CLOSES. The reliable signals for that are
+  // afterprint / focus-return / visibility-visible — but each of those can also
+  // fire in the split second the dialog is OPENING. Guard with a 1.5s minimum so
+  // only a close (which happens later) triggers restore. A 3-min hard fallback
+  // (in fire) guarantees the app is never stuck hidden.
+  const guardedRestore = () => { if (printStart.t && Date.now() - printStart.t > 1500) setTimeout(restore, 250); };
+  const onVis = () => { if (document.visibilityState === "visible") guardedRestore(); };
+  window.addEventListener("afterprint", guardedRestore);
+  window.addEventListener("focus", guardedRestore);
+  document.addEventListener("visibilitychange", onVis);
 
   let fired = false;
   const fire = () => {
@@ -398,9 +410,12 @@ ${order.payment === "cash" && order.received ? `
     // receipt (everything else hidden) before the print pipeline captures it.
     void document.body.offsetHeight;
     requestAnimationFrame(() => requestAnimationFrame(() => {
+      printStart.t = Date.now(); // start the 1.5s guard window before opening the dialog
       try { window.print(); }
       catch (e) { alert("ພິມບໍ່ໄດ້ / Print failed: " + e.message); restore(); return; }
-      setTimeout(restore, 15000); // safety net so the app is never stuck hidden
+      // Long fallback ONLY (3 min): the dialog can stay open a while as the user
+      // changes settings — restoring sooner would break the re-generated preview.
+      setTimeout(restore, 180000);
     }));
   };
 
@@ -536,7 +551,12 @@ function ReceiptModal({ order, shopInfo, onClose, onSaveRemark }) {
   const doPrint = () => {
     const o = { ...order, note: remark.trim() };
     if (onSaveRemark && remark.trim() !== (order.note || "")) onSaveRemark(o); // persist + sync the edit
-    printReceipt(o, shopInfo);
+    // Close this popup BEFORE printing so it can't be captured by the printer.
+    // (On Android the print grabs the on-screen layers; if this modal is still up
+    // it prints the modal instead of the generated receipt.) printReceipt runs
+    // after the modal has unmounted.
+    onClose();
+    setTimeout(() => printReceipt(o, shopInfo), 80);
   };
 
   return (
