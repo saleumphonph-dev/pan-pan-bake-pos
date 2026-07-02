@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.02-3";
+const BUILD_VERSION = "2026.07.02-4";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1712,10 +1712,17 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
   const [dateTo,setDateTo]=useState("");
   const [statusFilter,setStatusFilter]=useState("all");
   const [voidTarget,setVoidTarget]=useState(null);
+  // Upload status: ids in "pendingSales" failed to reach the cloud (offline). Poll
+  // localStorage (free — no DB query) so the per-row dots update as they upload.
+  const [pendingIds,setPendingIds]=useState(()=>stor.get("pendingSales",[]));
+  useEffect(()=>{ const id=setInterval(()=>setPendingIds(stor.get("pendingSales",[])),3000); return ()=>clearInterval(id); },[]);
+  const pendingSet=new Set(pendingIds);
+  const markPending=(id,ok)=>{ const p=stor.get("pendingSales",[]); const n=ok?p.filter(x=>x!==id):(p.includes(id)?p:[...p,id]); stor.set("pendingSales",n); setPendingIds(n); };
   const voidOrder=(order,reason)=>{
     const voidedOrder={...order,voided:true,voidReason:reason,voidedAt:new Date().toISOString()};
     const updated=sales.map(s=>s.id===order.id?voidedOrder:s);
-    setSales(updated); stor.set("sales",updated); syncOrder(voidedOrder); setVoidTarget(null);
+    setSales(updated); stor.set("sales",updated); setVoidTarget(null);
+    syncOrder(voidedOrder).then(ok=>markPending(order.id,ok)).catch(()=>markPending(order.id,false));
   };
 
   const passStatus=(s)=>{
@@ -1771,7 +1778,15 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
             background:statusFilter===v?"#1a1a2e":"#fff",color:statusFilter===v?"#f4d03f":"#374151"
           }}>{l}</button>
         ))}
-        <div style={{ marginLeft:"auto",fontSize:12,color:"#6b7280",alignSelf:"center" }}>ພົບ {filtered.length} ໃບ</div>
+        <div style={{ marginLeft:"auto",display:"flex",alignItems:"center",gap:10 }}>
+          <span style={{ display:"inline-flex",alignItems:"center",gap:5,fontSize:12,fontWeight:600,padding:"5px 10px",borderRadius:20,
+            background:pendingIds.length===0?"#dcfce7":"#fef3c7",color:pendingIds.length===0?"#16a34a":"#b45309" }}
+            title={pendingIds.length===0?"ທຸກໃບຖືກອັບໂຫຼດຂຶ້ນ Cloud ແລ້ວ":"ໃບທີ່ຍັງບໍ່ໄດ້ອັບໂຫຼດ (ຈະອັບເອງເມື່ອ online)"}>
+            <span style={{ width:8,height:8,borderRadius:"50%",background:pendingIds.length===0?"#16a34a":"#f59e0b" }} />
+            {pendingIds.length===0?"☁️ ອັບໂຫຼດຄົບ / Synced":`⏳ ${pendingIds.length} ລໍຖ້າອັບໂຫຼດ / pending`}
+          </span>
+          <span style={{ fontSize:12,color:"#6b7280" }}>ພົບ {filtered.length} ໃບ</span>
+        </div>
       </div>
       <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden" }}>
         {filtered.length===0?<div style={{ padding:40,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີ</div>:filtered.map((s,i)=>{
@@ -1783,10 +1798,12 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
                 {isVoid?"🚫":isFOC?"🎁":s.payment==="cash"?"💵":s.payment==="qr"?"📲":"🏦"}
               </div>
               <div style={{ flex:1,minWidth:0 }}>
-                <div style={{ fontSize:13,fontWeight:600 }}>
+                <div style={{ fontSize:13,fontWeight:600,display:"flex",alignItems:"center",gap:6 }}>
+                  <span title={pendingSet.has(s.id)?"ລໍຖ້າອັບໂຫຼດ / Waiting to upload":"ອັບໂຫຼດຂຶ້ນ Cloud ແລ້ວ / Synced"}
+                    style={{ width:9,height:9,borderRadius:"50%",flexShrink:0,background:pendingSet.has(s.id)?"#f59e0b":"#16a34a" }} />
                   #{s.id.toUpperCase()}
-                  {isVoid&&<span style={{ marginLeft:6,fontSize:10,background:"#fee2e2",color:"#dc2626",padding:"1px 5px",borderRadius:3 }}>VOID</span>}
-                  {isFOC&&<span style={{ marginLeft:6,fontSize:10,background:"#dcfce7",color:"#16a34a",padding:"1px 5px",borderRadius:3 }}>FOC</span>}
+                  {isVoid&&<span style={{ fontSize:10,background:"#fee2e2",color:"#dc2626",padding:"1px 5px",borderRadius:3 }}>VOID</span>}
+                  {isFOC&&<span style={{ fontSize:10,background:"#dcfce7",color:"#16a34a",padding:"1px 5px",borderRadius:3 }}>FOC</span>}
                 </div>
                 <div style={{ fontSize:11,color:"#6b7280" }}>{fmtDT(s.date)} · {s.cashier||"—"}</div>
                 <div style={{ fontSize:11,color:"#9ca3af",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>
