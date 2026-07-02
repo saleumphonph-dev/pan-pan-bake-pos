@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.01-9";
+const BUILD_VERSION = "2026.07.02-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -2392,16 +2392,22 @@ export default function App() {
   useEffect(() => {
     if (!role) return; // only when logged in
     let cancelled = false;
-    const RECENT_MS = 15 * 60 * 1000; // protect + re-upload local-only rows newer than this
-    const reconcile = (prev, cloud, tsField, repush) => {
+    // UNION merge — cloud rows win for matching ids, and any local row NOT in the
+    // cloud is KEPT (never dropped) and re-pushed so it reaches the cloud. This
+    // makes new sales from every device show up everywhere without ever losing a
+    // record (the old code dropped local rows missing from the cloud, which caused
+    // the "overwrite / only old records" data loss, especially once a fetch was
+    // capped at 1000 rows). Deletions/resets propagate via the purge marker below:
+    // a local row created BEFORE dataPurgedAt was wiped on purpose, so it's dropped.
+    const reconcile = (prev, cloud, tsField, repush, purgeMs) => {
       const cloudMap = new Map(cloud.map(r => [r.id, r]));
       const merged = new Map(cloudMap);
       prev.forEach(r => {
-        if (!cloudMap.has(r.id)) {
-          const age = Date.now() - new Date(r[tsField]).getTime();
-          if (age >= 0 && age < RECENT_MS) { merged.set(r.id, r); repush(r); } // recent → keep & re-upload
-          // else: old local-only row → deleted on server → drop
-        }
+        if (cloudMap.has(r.id)) return; // cloud version already used
+        const t = new Date(r[tsField]).getTime();
+        if (purgeMs && t < purgeMs) return; // wiped by a reset → drop
+        merged.set(r.id, r);               // keep local-only row (offline sale)
+        repush(r);                          // push it up so other devices get it
       });
       return Array.from(merged.values());
     };
@@ -2421,16 +2427,22 @@ export default function App() {
     const sync = async () => {
       const [cs, cf, cset] = await Promise.all([fetchSales(), fetchShifts(), fetchSettings()]);
       if (cancelled) return;
+      // Purge marker: written to the cloud by "Reset Test Data". Rows older than it
+      // were wiped on purpose, so drop them everywhere. Persist locally so it's
+      // known even on a poll where the settings fetch failed.
+      let purgedAt = stor.get("dataPurgedAt", null);
+      if (cset && cset.dataPurgedAt) { purgedAt = cset.dataPurgedAt.value; stor.set("dataPurgedAt", purgedAt); }
+      const purgeMs = purgedAt ? new Date(purgedAt).getTime() : 0;
       if (cs) {
         setSales(prev => {
-          const next = reconcile(prev, cs, "date", syncOrder);
+          const next = reconcile(prev, cs, "date", syncOrder, purgeMs);
           stor.set("sales", next);
           return next;
         });
       }
       if (cf) {
         setShifts(prev => {
-          const next = reconcile(prev, cf, "openedAt", syncShift);
+          const next = reconcile(prev, cf, "openedAt", syncShift, purgeMs);
           stor.set("shifts", next);
           return next;
         });
@@ -2460,6 +2472,12 @@ export default function App() {
     // surviving cloud copy would just re-sync back down.
     const r=await wipeAllCloudData();
     if(!r.ok){ alert("⚠️ ລຶບ Cloud ບໍ່ສຳເລັດ: "+r.error+"\nບໍ່ໄດ້ລຶບຫຍັງ. ລອງໃໝ່ຕອນ online.\nCloud wipe failed — nothing was cleared."); return; }
+    // Write a purge marker so EVERY device drops its pre-reset local rows on the
+    // next sync (the merge is union-based now and never drops otherwise, so this is
+    // what makes a reset actually propagate instead of getting re-uploaded).
+    const purgeTs=new Date().toISOString();
+    await syncSetting("dataPurgedAt", purgeTs);
+    stor.set("dataPurgedAt", purgeTs);
     // Cloud is empty. Clear all local POS data and reload so no in-flight poll or
     // stale state can re-populate. Other devices drop their copies on next sync.
     ["sales","shifts","parked","expenses"].forEach(k=>stor.set(k,[]));

@@ -6,8 +6,10 @@ name: Supabase Keep-Alive
 
 on:
   schedule:
-    # Runs twice a week (Mon & Thu, 02:17 UTC) — well inside the ~7-day window.
-    - cron: "17 2 * * 1,4"
+    # Runs EVERY DAY (02:17 UTC). Twice a week was too close to the ~7-day
+    # auto-pause window — a single skipped GitHub-cron run could let it pause.
+    # Daily leaves a large safety margin.
+    - cron: "17 2 * * *"
   workflow_dispatch: {} # allow manual "Run workflow" from the Actions tab
 
 jobs:
