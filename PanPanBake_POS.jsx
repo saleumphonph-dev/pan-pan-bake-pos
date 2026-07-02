@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.02-5";
+const BUILD_VERSION = "2026.07.02-6";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -2643,12 +2643,19 @@ export default function App() {
       if (cset && cset.dataPurgedAt) { purgedAt = cset.dataPurgedAt.value; stor.set("dataPurgedAt", purgedAt); }
       const purgeMs = purgedAt ? new Date(purgedAt).getTime() : 0;
       if (cs) {
-        setSales(prev => { const next = mergeChanges(prev, cs.rows, "date", purgeMs); stor.set("sales", next); return next; });
+        const merged = mergeChanges(stor.get("sales", []), cs.rows, "date", purgeMs);
+        stor.set("sales", merged); setSales(merged);
         if (cs.cursor) stor.set("salesCursor", cs.cursor);
+        // On a full reconcile we have the COMPLETE cloud set, so push up any local
+        // sale that isn't in the cloud yet (writes are egress-free). This is what
+        // makes every device's records converge — no bill stays stuck on one device.
+        if (fullReconcile) { const cloudIds = new Set(cs.rows.map(r => r.id)); merged.forEach(o => { if (!cloudIds.has(o.id)) syncOrder(o); }); }
       }
       if (cf) {
-        setShifts(prev => { const next = mergeChanges(prev, cf.rows, "openedAt", purgeMs); stor.set("shifts", next); return next; });
+        const merged = mergeChanges(stor.get("shifts", []), cf.rows, "openedAt", purgeMs);
+        stor.set("shifts", merged); setShifts(merged);
         if (cf.cursor) stor.set("shiftsCursor", cf.cursor);
+        if (fullReconcile) { const cloudIds = new Set(cf.rows.map(r => r.id)); merged.forEach(o => { if (!cloudIds.has(o.id)) syncShift(o); }); }
       }
       if (cset) {
         applySetting("menu", setMenu, cset);
