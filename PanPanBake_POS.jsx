@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.02-7";
+const BUILD_VERSION = "2026.07.03-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1772,7 +1772,9 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
     return s.payment===statusFilter; // cash / qr / transfer / foc
   };
 
-  const filtered=sales.filter(s=>{
+  // Reliable newest-first order (sorted by date/time — the merge/Map order isn't
+  // guaranteed chronological once bills arrive from multiple devices).
+  const filteredAll=sales.filter(s=>{
     // Text search: bill ID, item name (EN/Lao), or the customer remark (note)
     const q=search.trim().toLowerCase();
     const matchesSearch=q===""
@@ -1789,15 +1791,57 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
       if(dateTo&&sDate>dateTo)return false;
     }
     return true;
-  }).slice().reverse().slice(0,150);
+  }).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  const filtered=filteredAll.slice(0,150); // cap the on-screen list; print uses the full set
 
   const STATUS_CHIPS=[["all","ທັງໝົດ"],["cash","💵 ສົດ"],["qr","📲 QR"],["transfer","🏦 ໂອນ"],["foc","🎁 FOC"],["void","🚫 ຍົກເລີກ"]];
 
+  // Force a full re-sync now: pull the complete cloud set (reset cursor) and re-push
+  // anything still waiting to upload. (Data is ALWAYS saved locally the instant a
+  // sale is rung up — this button just hurries the cloud sync along.)
+  const [syncMsg,setSyncMsg]=useState("");
+  const syncNow=()=>{
+    stor.set("salesCursor","1970-01-01T00:00:00.000Z");
+    stor.set("shiftsCursor","1970-01-01T00:00:00.000Z");
+    const cur=stor.get("sales",[]);
+    stor.get("pendingSales",[]).forEach(id=>{ const o=cur.find(x=>x.id===id); if(o) syncOrder(o).then(ok=>markPending(id,ok)); });
+    setSyncMsg("🔄 ກຳລັງ sync... ຈະອັບເດດພາຍໃນ ~30 ວິ / Syncing — updates within ~30s");
+    setTimeout(()=>setSyncMsg(""),6000);
+  };
+
+  // Print the CURRENTLY FILTERED history (respects search / status / date range) as
+  // a table incl. customer remark and items.
+  const printHistory=()=>{
+    const esc=(s)=>String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+    const label = (dateFrom||dateTo)
+      ? `${dateFrom||"..."} → ${dateTo||"..."}`
+      : (statusFilter!=="all"? (STATUS_CHIPS.find(c=>c[0]===statusFilter)?.[1]||statusFilter) : "ທັງໝົດ / All");
+    const asc=[...filteredAll].reverse(); // oldest → newest for a log
+    const rows=asc.map(s=>{
+      const net=s.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0)-(s.discount||0);
+      const items=s.items.map(it=>`${esc(it.name)}×${it.qty}`).join(", ");
+      const pay=s.payment==="cash"?"ສົດ":s.payment==="qr"?"QR":s.payment==="transfer"?"ໂອນ":"FOC";
+      return `<tr${s.voided?' style="color:#b91c1c"':''}><td>${fmtDT(s.date)}</td><td>#${esc(s.id.toUpperCase())}${s.voided?" (VOID)":""}</td><td>${esc(s.cashier||"—")}</td><td>${items}</td><td>${esc((s.note||"").replace(/\n/g," / "))}</td><td>${pay}</td><td class="num">${s.voided?"—":formatKip(net)}</td></tr>`;
+    }).join("");
+    const totalRev=filteredAll.filter(s=>!s.voided&&s.payment!=="foc").reduce((a,s)=>a+(s.items.reduce((x,it)=>x+itemPrice(it)*it.qty,0)-(s.discount||0)),0);
+    const html=`<h1>ປະຫວັດການຂາຍ / Sales History</h1>
+    <div class="sub">${esc(label)} &nbsp;·&nbsp; ${filteredAll.length} ໃບ / bills &nbsp;·&nbsp; ພິມ ${new Date().toLocaleString("en-GB")}</div>
+    <table><thead><tr><th>ວັນທີ/ເວລາ / Date-Time</th><th>ໃບບິນ / Bill</th><th>ພະນັກງານ / Cashier</th><th>ສິນຄ້າ / Items</th><th>ລູກຄ້າ / Customer</th><th>ຈ່າຍ / Pay</th><th class="num">ລວມ / Total</th></tr></thead>
+    <tbody>${rows||`<tr><td colspan="7">ບໍ່ມີ / No data</td></tr>`}</tbody>
+    <tfoot><tr><th colspan="6">ລວມຂາຍ (ບໍ່ລວມ void/FOC) / Net sales</th><th class="num">${formatKip(totalRev)}</th></tr></tfoot></table>`;
+    setTimeout(()=>printReport(html),50);
+  };
+
   return (
     <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
-      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16 }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10 }}>
         <div><h1 style={{ margin:0,fontSize:22,fontWeight:700 }}>🧾 ປະຫວັດການຂາຍ</h1><div style={{ fontSize:13,color:"#6b7280" }}>{sales.length} ໃບ</div></div>
+        <div style={{ display:"flex",gap:8 }}>
+          <button onClick={syncNow} style={{ padding:"9px 14px",background:"#fff",color:"#2563eb",border:"1px solid #bfdbfe",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13 }}>🔄 Sync now</button>
+          <button onClick={printHistory} style={{ padding:"9px 16px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13 }}>🖨️ ພິມ / Print</button>
+        </div>
       </div>
+      {syncMsg&&<div style={{ background:"#eff6ff",color:"#1d4ed8",border:"1px solid #bfdbfe",borderRadius:8,padding:"8px 12px",fontSize:13,marginBottom:12 }}>{syncMsg}</div>}
 
       {/* Search & Date Filters */}
       <div style={{ display:"flex",gap:8,alignItems:"center",marginBottom:20,flexWrap:"wrap" }}>
