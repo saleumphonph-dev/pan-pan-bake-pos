@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.02-4";
+const BUILD_VERSION = "2026.07.02-5";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -2329,10 +2329,200 @@ function ShiftView({ shifts, sales, currentShift, onOpen, onClose }) {
 // ============================================================
 // MAIN APP
 // ============================================================
+// ============================================================
+// REPORT
+// ============================================================
+// Print/Save a report as a full A4-ish page. Uses the same screen-swap approach as
+// receipts (hide the app, show only the report, print, restore) so it works on Mac
+// and Android alike.
+function printReport(innerHtml) {
+  document.getElementById("ppb-print-style")?.remove();
+  document.getElementById("ppb-print-root")?.remove();
+  const style = document.createElement("style");
+  style.id = "ppb-print-style";
+  style.textContent = `
+  @page{margin:12mm;}
+  #ppb-print-root{font-family:'Noto Sans Lao','Segoe UI',Arial,sans-serif;color:#111;background:#fff;max-width:820px;margin:0 auto;padding:8px;}
+  #ppb-print-root h1{font-size:22px;margin:0 0 2px;}
+  #ppb-print-root .sub{color:#555;font-size:13px;margin-bottom:14px;}
+  #ppb-print-root .cards{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;}
+  #ppb-print-root .card{border:1px solid #ccc;border-radius:8px;padding:8px 12px;min-width:150px;}
+  #ppb-print-root .card .k{font-size:11px;color:#666;}
+  #ppb-print-root .card .v{font-size:18px;font-weight:700;}
+  #ppb-print-root table{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;}
+  #ppb-print-root th,#ppb-print-root td{border:1px solid #ccc;padding:6px 8px;text-align:left;}
+  #ppb-print-root th{background:#f3f4f6;}
+  #ppb-print-root .num{text-align:right;white-space:nowrap;}`;
+  document.head.appendChild(style);
+  const root = document.createElement("div");
+  root.id = "ppb-print-root";
+  root.innerHTML = innerHtml;
+  document.body.appendChild(root);
+  const hidden = [];
+  Array.from(document.body.children).forEach(el => { if (el.id === "ppb-print-root") return; hidden.push([el, el.style.display]); el.style.display = "none"; });
+  let restored = false, t0 = 0;
+  const restore = () => { if (restored) return; restored = true; hidden.forEach(([el, d]) => { el.style.display = d; }); document.getElementById("ppb-print-style")?.remove(); document.getElementById("ppb-print-root")?.remove(); window.removeEventListener("afterprint", onEnd); window.removeEventListener("focus", onEnd); };
+  const onEnd = () => { if (t0 && Date.now() - t0 > 1200) setTimeout(restore, 300); };
+  window.addEventListener("afterprint", onEnd); window.addEventListener("focus", onEnd);
+  setTimeout(() => { t0 = Date.now(); try { window.print(); } catch (e) { restore(); return; } setTimeout(restore, 180000); }, 200);
+}
+
+function ReportView({ sales }) {
+  const [period, setPeriod] = useState("month");
+  const [anchor, setAnchor] = useState(() => new Date());
+  const orderNet = (o) => o.items.reduce((s,i)=>s+itemPrice(i)*i.qty,0) - (o.discount||0);
+
+  const a = new Date(anchor);
+  let start, end, label;
+  const canNav = period !== "all";
+  if (period==="day") {
+    start=new Date(a); start.setHours(0,0,0,0); end=new Date(a); end.setHours(23,59,59,999);
+    label=a.toLocaleDateString("en-GB",{weekday:"short",day:"2-digit",month:"short",year:"numeric"});
+  } else if (period==="week") {
+    const dow=(a.getDay()+6)%7; start=new Date(a); start.setDate(a.getDate()-dow); start.setHours(0,0,0,0);
+    end=new Date(start); end.setDate(start.getDate()+6); end.setHours(23,59,59,999);
+    label=`${start.toLocaleDateString("en-GB",{day:"2-digit",month:"short"})} – ${end.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})}`;
+  } else if (period==="month") {
+    start=new Date(a.getFullYear(),a.getMonth(),1); end=new Date(a.getFullYear(),a.getMonth()+1,0,23,59,59,999);
+    label=a.toLocaleDateString("en-GB",{month:"long",year:"numeric"});
+  } else if (period==="year") {
+    start=new Date(a.getFullYear(),0,1); end=new Date(a.getFullYear(),11,31,23,59,59,999); label=String(a.getFullYear());
+  } else { start=new Date(0); end=new Date(8640000000000000); label="ທັງໝົດ / All time"; }
+
+  const move=(dir)=>{ const d=new Date(anchor);
+    if(period==="day")d.setDate(d.getDate()+dir);
+    else if(period==="week")d.setDate(d.getDate()+7*dir);
+    else if(period==="month")d.setMonth(d.getMonth()+dir);
+    else if(period==="year")d.setFullYear(d.getFullYear()+dir);
+    setAnchor(d);
+  };
+
+  const per=sales.filter(s=>{const d=new Date(s.date);return d>=start&&d<=end;});
+  const valid=per.filter(s=>!s.voided&&s.payment!=="foc");
+  const revenue=valid.reduce((s,o)=>s+orderNet(o),0);
+  const bills=valid.length;
+  const itemsSold=valid.reduce((s,o)=>s+o.items.reduce((x,i)=>x+i.qty,0),0);
+  const avg=bills?revenue/bills:0;
+  const discount=valid.reduce((s,o)=>s+(o.discount||0),0);
+  const pay=(p)=>valid.filter(o=>o.payment===p).reduce((s,o)=>s+orderNet(o),0);
+  const cash=pay("cash"),qr=pay("qr"),transfer=pay("transfer");
+  const voids=per.filter(s=>s.voided).length;
+  const foc=per.filter(s=>s.payment==="foc").length;
+  const im={};
+  valid.forEach(o=>o.items.forEach(it=>{const k=it.name;if(!im[k])im[k]={name:it.name,nameLao:it.nameLao,emoji:it.emoji,qty:0,rev:0};im[k].qty+=it.qty;im[k].rev+=itemPrice(it)*it.qty;}));
+  const items=Object.values(im).sort((x,y)=>y.rev-x.rev);
+
+  const PERIODS=[["all","ທັງໝົດ / All"],["year","ປີ / Year"],["month","ເດືອນ / Month"],["week","ອາທິດ / Week"],["day","ວັນ / Day"]];
+  const esc=(s)=>String(s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+  const doPrint=()=>{
+    const rows=items.map(it=>`<tr><td>${esc(it.name)}${it.nameLao?` <small style="color:#777">${esc(it.nameLao)}</small>`:""}</td><td class="num">${it.qty}</td><td class="num">${formatKip(it.rev)}</td><td class="num">${revenue?((it.rev/revenue)*100).toFixed(1):0}%</td></tr>`).join("");
+    const html=`<h1>ລາຍງານການຂາຍ / Sales Report</h1>
+    <div class="sub">${esc(label)} &nbsp;·&nbsp; ພິມ ${new Date().toLocaleString("en-GB")}</div>
+    <div class="cards">
+      <div class="card"><div class="k">ລາຍຮັບ / Revenue</div><div class="v">${formatKip(revenue)}</div></div>
+      <div class="card"><div class="k">ໃບບິນ / Bills</div><div class="v">${bills}</div></div>
+      <div class="card"><div class="k">ສິນຄ້າຂາຍ / Items sold</div><div class="v">${itemsSold}</div></div>
+      <div class="card"><div class="k">ສະເລ່ຍ/ໃບ / Avg per bill</div><div class="v">${formatKip(avg)}</div></div>
+    </div>
+    <table><thead><tr><th>ການຈ່າຍ / Payment</th><th class="num">ຈຳນວນ / Amount</th></tr></thead><tbody>
+      <tr><td>ເງິນສົດ / Cash</td><td class="num">${formatKip(cash)}</td></tr>
+      <tr><td>QR</td><td class="num">${formatKip(qr)}</td></tr>
+      <tr><td>ໂອນ / Transfer</td><td class="num">${formatKip(transfer)}</td></tr>
+      <tr><td>ສ່ວນຫຼຸດ / Discount</td><td class="num">-${formatKip(discount)}</td></tr>
+      <tr><td>ຍົກເລີກ / Voids · ຟຣີ / FOC</td><td class="num">${voids} · ${foc}</td></tr>
+    </tbody></table>
+    <table><thead><tr><th>ສິນຄ້າ / Item</th><th class="num">ຈຳນວນ / Qty</th><th class="num">ລາຍຮັບ / Revenue</th><th class="num">%</th></tr></thead>
+    <tbody>${rows||`<tr><td colspan="4">ບໍ່ມີຂໍ້ມູນ / No data</td></tr>`}</tbody>
+    <tfoot><tr><th>ລວມ / Total</th><th class="num">${itemsSold}</th><th class="num">${formatKip(revenue)}</th><th class="num">100%</th></tr></tfoot></table>`;
+    setTimeout(()=>printReport(html),50);
+  };
+
+  const Card=({k,v,c})=>(<div style={{ background:"#fff",border:"1px solid #e5e7eb",borderRadius:12,padding:"12px 14px",flex:"1 1 140px",minWidth:140 }}><div style={{ fontSize:11,color:"#6b7280" }}>{k}</div><div style={{ fontSize:20,fontWeight:700,color:c||"#111827" }}>{v}</div></div>);
+
+  return (
+    <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
+      <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:14 }}>
+        <div><h1 style={{ margin:0,fontSize:22,fontWeight:700 }}>📈 ລາຍງານ / Report</h1><div style={{ fontSize:13,color:"#6b7280" }}>ສະຫຼຸບການຂາຍ ແລະ ສິນຄ້າຂາຍດີ</div></div>
+        <button onClick={doPrint} style={{ padding:"10px 18px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14 }}>🖨️ ພິມ / ບັນທຶກ PDF</button>
+      </div>
+
+      {/* Period selector */}
+      <div style={{ display:"flex",gap:6,flexWrap:"wrap",marginBottom:10 }}>
+        {PERIODS.map(([v,l])=>(
+          <button key={v} onClick={()=>setPeriod(v)} style={{ padding:"7px 14px",borderRadius:20,border:"none",cursor:"pointer",fontSize:13,fontWeight:period===v?700:500,background:period===v?"#1a1a2e":"#fff",color:period===v?"#f4d03f":"#374151" }}>{l}</button>
+        ))}
+      </div>
+      <div style={{ display:"flex",alignItems:"center",gap:10,marginBottom:18 }}>
+        {canNav&&<button onClick={()=>move(-1)} style={{ width:36,height:36,borderRadius:8,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:16 }}>‹</button>}
+        <div style={{ fontSize:15,fontWeight:700,color:"#1a1a2e" }}>{label}</div>
+        {canNav&&<button onClick={()=>move(1)} style={{ width:36,height:36,borderRadius:8,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:16 }}>›</button>}
+        {canNav&&<button onClick={()=>setAnchor(new Date())} style={{ padding:"7px 12px",borderRadius:8,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:12,color:"#6b7280" }}>ມື້ນີ້ / Now</button>}
+      </div>
+
+      {/* Summary cards */}
+      <div style={{ display:"flex",flexWrap:"wrap",gap:10,marginBottom:16 }}>
+        <Card k="ລາຍຮັບ / Revenue" v={formatKip(revenue)} c="#16a34a" />
+        <Card k="ໃບບິນ / Bills" v={bills} />
+        <Card k="ສິນຄ້າຂາຍ / Items sold" v={itemsSold} />
+        <Card k="ສະເລ່ຍ/ໃບ / Avg per bill" v={formatKip(avg)} />
+      </div>
+
+      {/* Payment + extras */}
+      <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",padding:16,marginBottom:16 }}>
+        <div style={{ fontSize:14,fontWeight:700,marginBottom:10 }}>💳 ຕາມການຈ່າຍ / By payment</div>
+        {[["💵 ເງິນສົດ / Cash",cash],["📲 QR",qr],["🏦 ໂອນ / Transfer",transfer]].map(([l,v])=>(
+          <div key={l} style={{ display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #f3f4f6",fontSize:14 }}>
+            <span>{l}</span><span style={{ fontWeight:700 }}>{formatKip(v)}{revenue>0&&<span style={{ color:"#9ca3af",fontWeight:400,fontSize:12,marginLeft:6 }}>{((v/revenue)*100).toFixed(0)}%</span>}</span>
+          </div>
+        ))}
+        <div style={{ display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:13,color:"#6b7280",marginTop:4 }}>
+          <span>ສ່ວນຫຼຸດ / Discount: <b style={{ color:"#dc2626" }}>-{formatKip(discount)}</b></span>
+          <span>ຍົກເລີກ / Void: <b>{voids}</b> · FOC: <b>{foc}</b></span>
+        </div>
+      </div>
+
+      {/* Items sold */}
+      <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",padding:16 }}>
+        <div style={{ fontSize:14,fontWeight:700,marginBottom:10 }}>🍞 ສິນຄ້າຂາຍ / Items sold ({items.length})</div>
+        {items.length===0?<div style={{ color:"#9ca3af",textAlign:"center",padding:20,fontSize:13 }}>ບໍ່ມີຂໍ້ມູນ / No data</div>:(
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13 }}>
+              <thead><tr style={{ color:"#6b7280",textAlign:"left" }}>
+                <th style={{ padding:"6px 8px" }}>#</th><th style={{ padding:"6px 8px" }}>ສິນຄ້າ / Item</th>
+                <th style={{ padding:"6px 8px",textAlign:"right" }}>ຈຳນວນ / Qty</th>
+                <th style={{ padding:"6px 8px",textAlign:"right" }}>ລາຍຮັບ / Revenue</th>
+                <th style={{ padding:"6px 8px",textAlign:"right" }}>%</th>
+              </tr></thead>
+              <tbody>
+                {items.map((it,i)=>(
+                  <tr key={it.name} style={{ borderTop:"1px solid #f3f4f6" }}>
+                    <td style={{ padding:"6px 8px",color:"#9ca3af" }}>{i+1}</td>
+                    <td style={{ padding:"6px 8px" }}>{it.emoji} {it.name} <span style={{ color:"#9ca3af" }}>{it.nameLao}</span></td>
+                    <td style={{ padding:"6px 8px",textAlign:"right",fontWeight:700 }}>{it.qty}</td>
+                    <td style={{ padding:"6px 8px",textAlign:"right",fontWeight:700,color:"#7c3aed" }}>{formatKip(it.rev)}</td>
+                    <td style={{ padding:"6px 8px",textAlign:"right",color:"#6b7280" }}>{revenue?((it.rev/revenue)*100).toFixed(1):0}%</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot><tr style={{ borderTop:"2px solid #1a1a2e",fontWeight:700 }}>
+                <td></td><td style={{ padding:"8px" }}>ລວມ / Total</td>
+                <td style={{ padding:"8px",textAlign:"right" }}>{itemsSold}</td>
+                <td style={{ padding:"8px",textAlign:"right" }}>{formatKip(revenue)}</td><td style={{ padding:"8px",textAlign:"right" }}>100%</td>
+              </tr></tfoot>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const NAV=[
   {id:"pos",label:"POS",icon:"🏪",roles:["cashier","manager","owner"]},
   {id:"shift",label:"ກະ",icon:"🌗",roles:["cashier","manager","owner"]},
   {id:"dashboard",label:"Dashboard",icon:"📊",roles:["manager","owner"]},
+  {id:"report",label:"ລາຍງານ",icon:"📈",roles:["manager","owner"]},
   {id:"history",label:"ປະຫວັດ",icon:"🧾",roles:["manager","owner"]},
   {id:"accounting",label:"ບັນຊີ",icon:"📒",roles:["owner"]},
   {id:"admin",label:"ຈັດການ",icon:"⚙️",roles:["manager","owner"]},
@@ -2405,6 +2595,7 @@ export default function App() {
   useEffect(() => {
     if (!role) return; // only when logged in
     let cancelled = false;
+    let pollN = 0;
     const EPOCH = "1970-01-01T00:00:00.000Z";
     const OVERLAP = 2 * 60 * 1000; // re-scan a 2-min window to absorb device clock skew
     const mergeChanges = (prev, changed, tsField, purgeMs) => {
@@ -2439,8 +2630,13 @@ export default function App() {
       }
     };
     const sync = async () => {
-      const salesSince  = new Date(Date.parse(stor.get("salesCursor", EPOCH)) - OVERLAP).toISOString();
-      const shiftsSince = new Date(Date.parse(stor.get("shiftsCursor", EPOCH)) - OVERLAP).toISOString();
+      // Every session's first poll, and every ~5 min, do a FULL reconcile (fetch
+      // from epoch) so any device that drifted out of sync converges back to the
+      // complete cloud set. Between those, fetch only changes since the cursor.
+      pollN += 1;
+      const fullReconcile = (pollN === 1) || (pollN % 10 === 0);
+      const salesSince  = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("salesCursor", EPOCH)) - OVERLAP).toISOString();
+      const shiftsSince = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("shiftsCursor", EPOCH)) - OVERLAP).toISOString();
       const [cs, cf, cset] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchSettings()]);
       if (cancelled) return;
       let purgedAt = stor.get("dataPurgedAt", null);
@@ -2549,6 +2745,7 @@ export default function App() {
       {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
       {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
       {view==="dashboard"&&<DashboardView sales={sales} />}
+      {view==="report"&&<ReportView sales={sales} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
       {view==="accounting"&&<AccountingView sales={sales} />}
       {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
@@ -2575,6 +2772,7 @@ export default function App() {
         {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
         {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
         {view==="dashboard"&&<DashboardView sales={sales} />}
+      {view==="report"&&<ReportView sales={sales} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
         {view==="accounting"&&<AccountingView sales={sales} />}
         {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
