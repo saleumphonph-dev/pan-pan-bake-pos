@@ -6,11 +6,12 @@ const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 export const supabase = url && key ? createClient(url, key) : null;
 
-/** Upsert a completed order to Supabase (fire-and-forget, never throws) */
+/** Upsert a completed order to Supabase. Returns true on success, false on failure.
+ *  Sets updated_at so incremental sync (fetchSalesSince) can pick up the change. */
 export async function syncOrder(order) {
-  if (!supabase) return;
+  if (!supabase) return false;
   try {
-    await supabase.from("sales").upsert({
+    const { error } = await supabase.from("sales").upsert({
       id:          order.id,
       date:        order.date,
       items:       order.items,
@@ -24,17 +25,20 @@ export async function syncOrder(order) {
       voided:      order.voided    ?? false,
       void_reason: order.voidReason?? null,
       parked_name: order.parkedName?? null,
+      updated_at:  new Date().toISOString(),
     });
+    return !error;
   } catch (e) {
     console.warn("[Supabase] syncOrder failed:", e.message);
+    return false;
   }
 }
 
-/** Upsert a shift record to Supabase (fire-and-forget, never throws) */
+/** Upsert a shift record to Supabase. Returns true on success, false on failure. */
 export async function syncShift(shift) {
-  if (!supabase) return;
+  if (!supabase) return false;
   try {
-    await supabase.from("shifts").upsert({
+    const { error } = await supabase.from("shifts").upsert({
       id:            shift.id,
       opened_at:     shift.openedAt,
       closed_at:     shift.closedAt    ?? null,
@@ -44,69 +48,92 @@ export async function syncShift(shift) {
       expected_cash: shift.expectedCash?? null,
       variance:      shift.variance    ?? null,
       notes:         shift.notes       ?? null,
+      updated_at:    new Date().toISOString(),
     });
+    return !error;
   } catch (e) {
     console.warn("[Supabase] syncShift failed:", e.message);
+    return false;
   }
 }
 
-// Supabase/PostgREST caps a single response (default 1000 rows). Page through the
-// whole table so we ALWAYS get every row — otherwise, once the shop passes ~1000
-// sales, the newest ones get cut off and never appear on other devices.
-async function fetchAllRows(table, orderCol) {
+// Incremental fetch: only rows whose updated_at is newer than `since`. This is the
+// key egress fix — steady-state polls transfer almost nothing instead of the whole
+// table every time. A fresh device passes since=epoch, so it still gets everything
+// once. Paginated (PostgREST caps a response at 1000 rows). Returns
+// { rows, cursor } (cursor = newest updated_at seen, to use as `since` next time),
+// or null on error (so the app never reconciles against a failed/empty fetch).
+async function fetchChangedRows(table, since) {
   if (!supabase) return null;
   const PAGE = 1000;
-  let all = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from(table)
-      .select("*")
-      .order(orderCol, { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) return null;                 // any error → null (don't reconcile on a bad fetch)
-    all = all.concat(data || []);
-    if (!data || data.length < PAGE) break;  // last page reached
-    if (from > 500000) break;                // hard safety stop
-  }
-  return all;
+  const runOn = async (col) => {
+    let all = [], cursor = since;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from(table)
+        .select("*")
+        .gt(col, since)
+        .order(col, { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) return { error };
+      (data || []).forEach(r => { const v = r[col]; if (v && v > cursor) cursor = v; });
+      all = all.concat(data || []);
+      if (!data || data.length < PAGE) break;
+      if (from > 500000) break;
+    }
+    return { rows: all, cursor };
+  };
+  // Prefer updated_at (catches voids/edits). If that column doesn't exist yet
+  // (migration pending), fall back to the creation-date column so NEW rows still
+  // sync incrementally and cheaply; voids/edits catch up once updated_at exists.
+  let res = await runOn("updated_at");
+  if (res.error) res = await runOn(table === "shifts" ? "opened_at" : "date");
+  if (res.error) return null;
+  return { rows: res.rows, cursor: res.cursor };
 }
 
-/** Fetch all sales from cloud — returns array shaped like local order objects, or null on error */
-export async function fetchSales() {
-  const rows = await fetchAllRows("sales", "date");
-  if (rows == null) return null;
-  return rows.map(r => ({
-    id:         r.id,
-    date:       r.date,
-    items:      r.items,
-    total:      r.total,
-    discount:   r.discount ?? 0,
-    payment:    r.payment,
-    received:   r.received,
-    note:       r.note,
-    cashier:    r.cashier,
-    shiftId:    r.shift_id,
-    voided:     r.voided ?? false,
-    voidReason: r.void_reason,
-    parkedName: r.parked_name,
-  }));
+/** Incremental sales fetch. `since` is an ISO timestamp. Returns { rows, cursor } or null. */
+export async function fetchSalesSince(since) {
+  const res = await fetchChangedRows("sales", since);
+  if (res == null) return null;
+  return {
+    cursor: res.cursor,
+    rows: res.rows.map(r => ({
+      id:         r.id,
+      date:       r.date,
+      items:      r.items,
+      total:      r.total,
+      discount:   r.discount ?? 0,
+      payment:    r.payment,
+      received:   r.received,
+      note:       r.note,
+      cashier:    r.cashier,
+      shiftId:    r.shift_id,
+      voided:     r.voided ?? false,
+      voidReason: r.void_reason,
+      parkedName: r.parked_name,
+    })),
+  };
 }
 
-/** Fetch all shifts from cloud — returns array shaped like local shift objects, or null on error */
-export async function fetchShifts() {
-  const rows = await fetchAllRows("shifts", "opened_at");
-  if (rows == null) return null;
-  return rows.map(r => ({
-    id:            r.id,
-    openedAt:      r.opened_at,
-    closedAt:      r.closed_at,
-    cashier:       r.cashier,
-    openingCash:   r.opening_cash ?? 0,
-    closingCash:   r.closing_cash,
-    expectedCash:  r.expected_cash,
-    variance:      r.variance,
-    notes:         r.notes,
-  }));
+/** Incremental shifts fetch. `since` is an ISO timestamp. Returns { rows, cursor } or null. */
+export async function fetchShiftsSince(since) {
+  const res = await fetchChangedRows("shifts", since);
+  if (res == null) return null;
+  return {
+    cursor: res.cursor,
+    rows: res.rows.map(r => ({
+      id:            r.id,
+      openedAt:      r.opened_at,
+      closedAt:      r.closed_at,
+      cashier:       r.cashier,
+      openingCash:   r.opening_cash ?? 0,
+      closingCash:   r.closing_cash,
+      expectedCash:  r.expected_cash,
+      variance:      r.variance,
+      notes:         r.notes,
+    })),
+  };
 }
 
 /** Fetch all settings rows (menu, categories, add-ons, shop info) keyed by name.

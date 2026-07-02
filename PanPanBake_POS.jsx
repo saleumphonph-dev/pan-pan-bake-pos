@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fetchShifts, fetchSettings, syncSetting } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchSettings, syncSetting } from "./src/lib/supabase.js";
 
 // ============================================================
 // CONSTANTS
@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSales, fe
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.02-1";
+const BUILD_VERSION = "2026.07.02-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -2379,41 +2379,27 @@ export default function App() {
   // Persist login session (null on logout) so reloads keep the user signed in.
   useEffect(() => { stor.set("session", role); }, [role]);
 
-  // Real-time cloud sync — polls Supabase every 10s. The cloud is authoritative:
-  //   • cloud rows win for matching ids,
-  //   • a local row that's NOT in the cloud is kept ONLY if it was created very
-  //     recently (likely an offline sale not yet uploaded) — and it's re-pushed
-  //     so it lands in the cloud,
-  //   • an OLD local row missing from the cloud is treated as deleted on the
-  //     server (e.g. Reset Test Data, or a void/removal on another device) and
-  //     is dropped — this is what makes deletions/resets propagate to every device.
-  // Reconciliation only runs on a SUCCESSFUL fetch, so a dropped connection
-  // (fetch returns null) never deletes anything.
+  // Cloud sync — INCREMENTAL to keep egress tiny (the old code re-downloaded the
+  // whole sales table every 10s per device, which blew past Supabase's free 5GB
+  // egress quota and got the project blocked). Now each poll only downloads rows
+  // whose updated_at changed since our saved cursor, so steady-state polls transfer
+  // almost nothing. A fresh device (cursor = epoch) still gets everything once.
+  //   • cloud change wins for a matching id,
+  //   • local-only rows are KEPT (never dropped) — no data loss,
+  //   • rows created before the dataPurgedAt marker (Reset Test Data) are dropped,
+  //   • failed uploads (made while offline) are retried from a pending list.
   useEffect(() => {
     if (!role) return; // only when logged in
     let cancelled = false;
-    // UNION merge — cloud rows win for matching ids, and any local row NOT in the
-    // cloud is KEPT (never dropped) and re-pushed so it reaches the cloud. This
-    // makes new sales from every device show up everywhere without ever losing a
-    // record (the old code dropped local rows missing from the cloud, which caused
-    // the "overwrite / only old records" data loss, especially once a fetch was
-    // capped at 1000 rows). Deletions/resets propagate via the purge marker below:
-    // a local row created BEFORE dataPurgedAt was wiped on purpose, so it's dropped.
-    const reconcile = (prev, cloud, tsField, repush, purgeMs) => {
-      const cloudMap = new Map(cloud.map(r => [r.id, r]));
-      const merged = new Map(cloudMap);
-      prev.forEach(r => {
-        if (cloudMap.has(r.id)) return; // cloud version already used
-        const t = new Date(r[tsField]).getTime();
-        if (purgeMs && t < purgeMs) return; // wiped by a reset → drop
-        merged.set(r.id, r);               // keep local-only row (offline sale)
-        repush(r);                          // push it up so other devices get it
-      });
-      return Array.from(merged.values());
+    const EPOCH = "1970-01-01T00:00:00.000Z";
+    const OVERLAP = 2 * 60 * 1000; // re-scan a 2-min window to absorb device clock skew
+    const mergeChanges = (prev, changed, tsField, purgeMs) => {
+      const map = new Map(prev.map(r => [r.id, r]));
+      changed.forEach(r => map.set(r.id, r)); // cloud change wins for this id
+      let arr = Array.from(map.values());
+      if (purgeMs) arr = arr.filter(r => new Date(r[tsField]).getTime() >= purgeMs); // drop reset rows
+      return arr;
     };
-    // Apply a cloud setting only when it is strictly newer than our local copy,
-    // so a device that just saved doesn't get its own edit echoed back, and an
-    // older cloud value never clobbers a fresh local edit.
     const applySetting = (key, setter, cloud) => {
       const c = cloud[key];
       if (!c) return;
@@ -2424,28 +2410,35 @@ export default function App() {
         stor.set(key + "Ts", c.updatedAt);
       }
     };
+    // Retry rows that failed to upload (e.g. made while offline). Writes don't count
+    // against egress, so this is cheap.
+    const retryPending = async (listKey, dataKey, pusher) => {
+      const pend = stor.get(listKey, []);
+      if (!pend.length) return;
+      const cur = stor.get(dataKey, []);
+      for (const id of pend) {
+        if (cancelled) return;
+        const o = cur.find(x => x.id === id);
+        if (!o) { stor.set(listKey, stor.get(listKey, []).filter(x => x !== id)); continue; }
+        const ok = await pusher(o);
+        if (ok) stor.set(listKey, stor.get(listKey, []).filter(x => x !== id));
+      }
+    };
     const sync = async () => {
-      const [cs, cf, cset] = await Promise.all([fetchSales(), fetchShifts(), fetchSettings()]);
+      const salesSince  = new Date(Date.parse(stor.get("salesCursor", EPOCH)) - OVERLAP).toISOString();
+      const shiftsSince = new Date(Date.parse(stor.get("shiftsCursor", EPOCH)) - OVERLAP).toISOString();
+      const [cs, cf, cset] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchSettings()]);
       if (cancelled) return;
-      // Purge marker: written to the cloud by "Reset Test Data". Rows older than it
-      // were wiped on purpose, so drop them everywhere. Persist locally so it's
-      // known even on a poll where the settings fetch failed.
       let purgedAt = stor.get("dataPurgedAt", null);
       if (cset && cset.dataPurgedAt) { purgedAt = cset.dataPurgedAt.value; stor.set("dataPurgedAt", purgedAt); }
       const purgeMs = purgedAt ? new Date(purgedAt).getTime() : 0;
       if (cs) {
-        setSales(prev => {
-          const next = reconcile(prev, cs, "date", syncOrder, purgeMs);
-          stor.set("sales", next);
-          return next;
-        });
+        setSales(prev => { const next = mergeChanges(prev, cs.rows, "date", purgeMs); stor.set("sales", next); return next; });
+        if (cs.cursor) stor.set("salesCursor", cs.cursor);
       }
       if (cf) {
-        setShifts(prev => {
-          const next = reconcile(prev, cf, "openedAt", syncShift, purgeMs);
-          stor.set("shifts", next);
-          return next;
-        });
+        setShifts(prev => { const next = mergeChanges(prev, cf.rows, "openedAt", purgeMs); stor.set("shifts", next); return next; });
+        if (cf.cursor) stor.set("shiftsCursor", cf.cursor);
       }
       if (cset) {
         applySetting("menu", setMenu, cset);
@@ -2453,17 +2446,24 @@ export default function App() {
         applySetting("addons", setAddons, cset);
         applySetting("shopInfo", setShopInfo, cset);
       }
+      retryPending("pendingSales", "sales", syncOrder);
+      retryPending("pendingShifts", "shifts", syncShift);
     };
     sync(); // immediate on login
-    const id = setInterval(sync, 10000); // every 10s
+    const id = setInterval(sync, 30000); // every 30s (was 10s — big egress cut)
     return () => { cancelled = true; clearInterval(id); };
   }, [role]);
 
   const handlePin=(r)=>{ if(pin===ROLES[r].pin){setRole(r);setPin("");setPinErr("");}else setPinErr("PIN ບໍ່ຖືກຕ້ອງ"); };
-  const addSale=(o)=>{ const u=[...sales,o];setSales(u);stor.set("sales",u);syncOrder(o); };
-  const updateSale=(o)=>{ const u=sales.map(s=>s.id===o.id?o:s);setSales(u);stor.set("sales",u);syncOrder(o); };
-  const openShift=({cash,notes})=>{ const s={id:genId(),openedAt:new Date().toISOString(),openingCash:cash,cashier:ROLES[role].label,notes};const u=[...shifts,s];setShifts(u);stor.set("shifts",u);syncShift(s);setShiftModal(null); };
-  const closeShift=({cash,notes,expected})=>{ const u=shifts.map(s=>s.id===currentShift.id?{...s,closedAt:new Date().toISOString(),closingCash:cash,expectedCash:expected,variance:cash-expected,notes:(s.notes?s.notes+" | ":"")+(notes||"")}:s);setShifts(u);stor.set("shifts",u);syncShift(u.find(s=>s.id===currentShift.id));setShiftModal(null); };
+  // Push to cloud and track failures in a pending list so the sync loop can retry
+  // them (covers sales/shifts made while offline). Writes don't count toward egress.
+  const markPending=(listKey,id,ok)=>{ const p=stor.get(listKey,[]); if(ok){stor.set(listKey,p.filter(x=>x!==id));} else if(!p.includes(id)){stor.set(listKey,[...p,id]);} };
+  const pushOrder=(o)=>{ syncOrder(o).then(ok=>markPending("pendingSales",o.id,ok)).catch(()=>markPending("pendingSales",o.id,false)); };
+  const pushShift=(s)=>{ syncShift(s).then(ok=>markPending("pendingShifts",s.id,ok)).catch(()=>markPending("pendingShifts",s.id,false)); };
+  const addSale=(o)=>{ const u=[...sales,o];setSales(u);stor.set("sales",u);pushOrder(o); };
+  const updateSale=(o)=>{ const u=sales.map(s=>s.id===o.id?o:s);setSales(u);stor.set("sales",u);pushOrder(o); };
+  const openShift=({cash,notes})=>{ const s={id:genId(),openedAt:new Date().toISOString(),openingCash:cash,cashier:ROLES[role].label,notes};const u=[...shifts,s];setShifts(u);stor.set("shifts",u);pushShift(s);setShiftModal(null); };
+  const closeShift=({cash,notes,expected})=>{ const u=shifts.map(s=>s.id===currentShift.id?{...s,closedAt:new Date().toISOString(),closingCash:cash,expectedCash:expected,variance:cash-expected,notes:(s.notes?s.notes+" | ":"")+(notes||"")}:s);setShifts(u);stor.set("shifts",u);pushShift(u.find(s=>s.id===currentShift.id));setShiftModal(null); };
 
   const resetTestData=async()=>{
     const c1=window.prompt("⚠️ ນີ້ຈະລຶບ Sales, Shifts, ແລະ Expenses ທັງໝົດ (ທັງໃນເຄື່ອງ ແລະ ໃນ Cloud).\nMenu, settings, QR ຈະຍັງຄົງຢູ່.\n\nພິມ RESET ເພື່ອຢືນຢັນ:");
@@ -2478,9 +2478,11 @@ export default function App() {
     const purgeTs=new Date().toISOString();
     await syncSetting("dataPurgedAt", purgeTs);
     stor.set("dataPurgedAt", purgeTs);
-    // Cloud is empty. Clear all local POS data and reload so no in-flight poll or
-    // stale state can re-populate. Other devices drop their copies on next sync.
-    ["sales","shifts","parked","expenses"].forEach(k=>stor.set(k,[]));
+    // Cloud is empty. Clear all local POS data + sync cursors/pending so no in-flight
+    // poll or stale state re-populates. Other devices drop their copies on next sync.
+    ["sales","shifts","parked","expenses","pendingSales","pendingShifts"].forEach(k=>stor.set(k,[]));
+    stor.set("salesCursor","1970-01-01T00:00:00.000Z");
+    stor.set("shiftsCursor","1970-01-01T00:00:00.000Z");
     alert("✅ ລ້າງຂໍ້ມູນທົດສອບສຳເລັດ (local + cloud).\nອຸປະກອນອື່ນຈະລ້າງເອງພາຍໃນ ~10 ວິນາທີ.\nກຳລັງໂຫຼດໃໝ່...");
     window.location.reload();
   };
