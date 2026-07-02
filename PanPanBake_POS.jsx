@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.02-6";
+const BUILD_VERSION = "2026.07.02-7";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1303,6 +1303,47 @@ function OfflineBanner() {
       {isNoDb
         ? "⚪ Local Only — ບໍ່ໄດ້ເຊື່ອມຕໍ່ Cloud (ບໍ່ sync ລະຫວ່າງເຄື່ອງ)"
         : "🔴 Offline — ຍັງບໍ່ sync ຂຶ້ນ Cloud! ຂໍ້ມູນຍັງຢູ່ໃນເຄື່ອງນີ້ເທົ່ານັ້ນ / Sales are NOT syncing to other devices"}
+    </div>
+  );
+}
+
+// Detects when a newer build has been deployed and offers a one-tap update, so
+// devices never get stuck on an old build (which is what breaks cross-device sync
+// and slows things down). Compares the loaded JS bundle to the one referenced by
+// the freshly-fetched index.html — no service worker, no extra DB load.
+function UpdateBanner() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const cur = (document.querySelector('script[type="module"][src*="/assets/index-"]')?.src || "").match(/assets\/index-[^"'/]+\.js/);
+    const currentFile = cur ? cur[0] : null;
+    if (!currentFile) return; // dev server / can't detect — skip
+    let stopped = false;
+    const base = (import.meta.env.BASE_URL || "/");
+    const check = async () => {
+      try {
+        const res = await fetch(`${base}?cb=${Date.now()}`, { cache: "no-store" });
+        if (!res.ok) return;
+        const html = await res.text();
+        const m = html.match(/assets\/index-[^"'/]+\.js/);
+        if (!stopped && m && m[0] !== currentFile) setReady(true);
+      } catch {}
+    };
+    const t = setTimeout(check, 10000);          // shortly after load
+    const id = setInterval(check, 3 * 60 * 1000); // and every 3 min
+    return () => { stopped = true; clearTimeout(t); clearInterval(id); };
+  }, []);
+  if (!ready) return null;
+  const reload = async () => {
+    try { if (window.caches) { const n = await caches.keys(); await Promise.all(n.map(k => caches.delete(k))); } } catch {}
+    window.location.replace((import.meta.env.BASE_URL || "/") + "?v=" + Date.now());
+  };
+  return (
+    <div onClick={reload} style={{
+      position:"sticky", top:0, zIndex:60, width:"100%", background:"#2563eb", color:"#fff",
+      fontFamily:"'Noto Sans Lao',sans-serif", fontSize:13, fontWeight:700,
+      textAlign:"center", padding:"9px 10px", cursor:"pointer", flexShrink:0,
+    }}>
+      🔄 ມີເວີຊັນໃໝ່ — ແຕະເພື່ອອັບເດດ / New version available — tap to update
     </div>
   );
 }
@@ -2748,6 +2789,7 @@ export default function App() {
   // Shared view content — inlined JSX, not a component, so POSView's state is never lost
   const viewContent = (
     <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden" }}>
+      <UpdateBanner />
       <OfflineBanner />
       {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
       {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
@@ -2775,6 +2817,7 @@ export default function App() {
         </div>
       </div>
       <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden",paddingTop:"calc(44px + env(safe-area-inset-top, 0px))",paddingBottom:"calc(64px + env(safe-area-inset-bottom, 0px))" }}>
+        <UpdateBanner />
         <OfflineBanner />
         {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
         {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
