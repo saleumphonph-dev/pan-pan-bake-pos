@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.02-2";
+const BUILD_VERSION = "2026.07.02-3";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1886,7 +1886,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
       <h1 style={{ margin:"0 0 4px",fontSize:22,fontWeight:700 }}>⚙️ ຈັດການລະບົບ</h1>
       <div style={{ fontSize:13,color:"#6b7280",marginBottom:16 }}>Admin Settings</div>
       <div style={{ display:"flex",gap:4,marginBottom:16,background:"#fff",padding:4,borderRadius:10,width:"fit-content",flexWrap:"wrap" }}>
-        {[["menu","🍞 ເມນູ"],["categories","📂 ໝວດ"],["addons","✨ Add-ons"],["settings","🏪 ຮ້ານ"],["qr","📲 QR"],["printer","🖨️ ເຄື່ອງພິມ"]].map(([v,l])=>(
+        {[["menu","🍞 ເມນູ"],["categories","📂 ໝວດ"],["addons","✨ Add-ons"],["settings","🏪 ຮ້ານ"],["qr","📲 QR"],["printer","🖨️ ເຄື່ອງພິມ"],...(role==="owner"?[["system","⚙️ ລະບົບ"]]:[])].map(([v,l])=>(
           <button key={v} onClick={()=>setTab(v)} style={{ padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",background:tab===v?"#1a1a2e":"transparent",color:tab===v?"#f4d03f":"#374151",fontWeight:tab===v?700:500,fontSize:13 }}>{l}</button>
         ))}
       </div>
@@ -2124,46 +2124,43 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             )}
             <input ref={qrRef} type="file" accept="image/*" onChange={e=>handleImg(e,"qr")} style={{ display:"none" }} />
           </div>
-          {role==="owner"&&(
-            <>
-              <div style={{ background:"#fff",borderRadius:14,padding:20,border:"2px solid #fecaca",marginTop:20 }}>
-                <div style={{ fontSize:15,fontWeight:700,color:"#dc2626",marginBottom:6 }}>⚠️ Danger Zone — ລ້າງຂໍ້ມູນທົດສອບ</div>
-                <div style={{ fontSize:12,color:"#6b7280",marginBottom:14,lineHeight:1.6 }}>
-                  ລຶບລາຍການຂາຍ, ກະ, ແລະ ລາຍຈ່າຍທັງໝົດ (ທັງໃນເຄື່ອງ ແລະ ໃນ Cloud).<br/>
-                  Menu, settings, QR ຈະຍັງຄົງຢູ່.<br/>
-                  <span style={{ color:"#dc2626",fontWeight:600 }}>Wipes all sales / shifts / expenses (local + cloud). Menu &amp; settings stay.</span>
-                </div>
-                <button onClick={onResetTestData} style={{ padding:"10px 18px",background:"#dc2626",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>
-                  🗑️ Reset Test Data
-                </button>
-              </div>
+        </div>
+      )}
 
-              <div style={{ background:"#fff",borderRadius:14,padding:20,border:"2px solid #bfdbfe",marginTop:16 }}>
-                <div style={{ fontSize:15,fontWeight:700,color:"#2563eb",marginBottom:6 }}>🔄 Force Refresh (PWA)</div>
-                <div style={{ fontSize:12,color:"#6b7280",marginBottom:14,lineHeight:1.6 }}>
-                  ລຶບ cache ທັງໝົດ ແລະ ໂຫລດຂໍ້ມູນໃໝ່ຈາກ server.<br/>
-                  ບໍ່ຈຳເປັນ uninstall/reinstall app ອີກຕໍ່ໄປ.<br/>
-                  <span style={{ color:"#2563eb",fontWeight:600 }}>Clears PWA cache &amp; service workers. No need to uninstall &amp; reinstall app.</span>
-                </div>
-                <button onClick={async()=>{
-                  if(!window.confirm("Clear all PWA cache and refresh? You'll be back at the login screen."))return;
-                  // IMPORTANT: actually WAIT for cache-clear + SW unregister to finish
-                  // before reloading. The old code reloaded immediately (race), so the
-                  // tablet often kept serving the stale build.
-                  try{ if(window.caches){ const names=await caches.keys(); await Promise.all(names.map(n=>caches.delete(n))); } }catch(e){}
-                  try{ if(navigator.serviceWorker){ const regs=await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r=>r.unregister())); } }catch(e){}
-                  // Cache-bust the HTML so GitHub Pages serves the newest index.html.
-                  window.location.replace(window.location.pathname+"?v="+Date.now());
-                }} style={{ padding:"10px 18px",background:"#2563eb",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>
-                  🔄 Force Refresh
-                </button>
-                <div style={{ marginTop:14,paddingTop:12,borderTop:"1px solid #e5e7eb",fontSize:13,color:"#374151" }}>
-                  ເວີຊັນ / Version: <span style={{ fontWeight:700,fontFamily:"monospace",color:"#111827" }}>{BUILD_VERSION}</span>
-                  <div style={{ fontSize:11,color:"#9ca3af",marginTop:2 }}>ຫຼັງ Force Refresh ໃຫ້ເຊັກວ່າເລກນີ້ກົງກັນທຸກເຄື່ອງ · After refresh, this number should match on every device.</div>
-                </div>
-              </div>
-            </>
-          )}
+      {tab==="system"&&role==="owner"&&(
+        <div>
+          <div style={{ background:"#fff",borderRadius:14,padding:20,border:"2px solid #bfdbfe" }}>
+            <div style={{ fontSize:15,fontWeight:700,color:"#2563eb",marginBottom:6 }}>🔄 Force Refresh (PWA)</div>
+            <div style={{ fontSize:12,color:"#6b7280",marginBottom:14,lineHeight:1.6 }}>
+              ລຶບ cache ທັງໝົດ ແລະ ໂຫລດຂໍ້ມູນໃໝ່ຈາກ server.<br/>
+              ບໍ່ຈຳເປັນ uninstall/reinstall app ອີກຕໍ່ໄປ.<br/>
+              <span style={{ color:"#2563eb",fontWeight:600 }}>Clears PWA cache &amp; service workers. No need to uninstall &amp; reinstall app.</span>
+            </div>
+            <button onClick={async()=>{
+              if(!window.confirm("Clear all PWA cache and refresh? You'll be back at the login screen."))return;
+              try{ if(window.caches){ const names=await caches.keys(); await Promise.all(names.map(n=>caches.delete(n))); } }catch(e){}
+              try{ if(navigator.serviceWorker){ const regs=await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r=>r.unregister())); } }catch(e){}
+              window.location.replace(window.location.pathname+"?v="+Date.now());
+            }} style={{ padding:"10px 18px",background:"#2563eb",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>
+              🔄 Force Refresh
+            </button>
+            <div style={{ marginTop:14,paddingTop:12,borderTop:"1px solid #e5e7eb",fontSize:13,color:"#374151" }}>
+              ເວີຊັນ / Version: <span style={{ fontWeight:700,fontFamily:"monospace",color:"#111827" }}>{BUILD_VERSION}</span>
+              <div style={{ fontSize:11,color:"#9ca3af",marginTop:2 }}>ຫຼັງ Force Refresh ໃຫ້ເຊັກວ່າເລກນີ້ກົງກັນທຸກເຄື່ອງ · After refresh, this number should match on every device.</div>
+            </div>
+          </div>
+
+          <div style={{ background:"#fff",borderRadius:14,padding:20,border:"2px solid #fecaca",marginTop:16 }}>
+            <div style={{ fontSize:15,fontWeight:700,color:"#dc2626",marginBottom:6 }}>⚠️ Danger Zone — ລ້າງຂໍ້ມູນທົດສອບ</div>
+            <div style={{ fontSize:12,color:"#6b7280",marginBottom:14,lineHeight:1.6 }}>
+              ລຶບລາຍການຂາຍ, ກະ, ແລະ ລາຍຈ່າຍທັງໝົດ (ທັງໃນເຄື່ອງ ແລະ ໃນ Cloud).<br/>
+              Menu, settings, QR ຈະຍັງຄົງຢູ່.<br/>
+              <span style={{ color:"#dc2626",fontWeight:600 }}>Wipes all sales / shifts / expenses (local + cloud). Menu &amp; settings stay.</span>
+            </div>
+            <button onClick={onResetTestData} style={{ padding:"10px 18px",background:"#dc2626",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>
+              🗑️ Reset Test Data
+            </button>
+          </div>
         </div>
       )}
 
