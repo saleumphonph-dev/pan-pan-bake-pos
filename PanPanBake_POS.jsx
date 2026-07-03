@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.03-2";
+const BUILD_VERSION = "2026.07.03-3";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1755,6 +1755,8 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
   const [dateFrom,setDateFrom]=useState("");
   const [dateTo,setDateTo]=useState("");
   const [statusFilter,setStatusFilter]=useState("all");
+  const [excludeVoid,setExcludeVoid]=useState(false);
+  const [excludeFoc,setExcludeFoc]=useState(false);
   const [voidTarget,setVoidTarget]=useState(null);
   // Upload status: ids in "pendingSales" failed to reach the cloud (offline). Poll
   // localStorage (free — no DB query) so the per-row dots update as they upload.
@@ -1786,6 +1788,8 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
       ||s.items.some(i=>i.name.toLowerCase().includes(q)||(i.nameLao||"").includes(search.trim()));
     if(!matchesSearch)return false;
     if(!passStatus(s))return false;
+    if(excludeVoid&&s.voided)return false;       // optionally leave voids out of the list/report
+    if(excludeFoc&&s.payment==="foc")return false; // and FOC/free bills
 
     // Date range filter
     if(dateFrom||dateTo){
@@ -1875,6 +1879,17 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
           </span>
           <span style={{ fontSize:12,color:"#6b7280" }}>ພົບ {filtered.length} ໃບ</span>
         </div>
+      </div>
+
+      {/* Report include/exclude toggles (apply to the list AND the print) */}
+      <div style={{ display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center" }}>
+        <span style={{ fontSize:12,color:"#6b7280" }}>ໃສ່ໃນລາຍງານ / In report:</span>
+        {[["🚫 ບໍ່ລວມ ຍົກເລີກ / Exclude Void",excludeVoid,setExcludeVoid],["🎁 ບໍ່ລວມ FOC / Exclude FOC",excludeFoc,setExcludeFoc]].map(([l,on,set])=>(
+          <button key={l} onClick={()=>set(!on)} style={{
+            padding:"6px 12px",borderRadius:20,cursor:"pointer",fontSize:12,fontWeight:on?700:500,whiteSpace:"nowrap",
+            border:on?"none":"1px solid #e5e7eb", background:on?"#dc2626":"#fff", color:on?"#fff":"#374151"
+          }}>{on?"✓ ":""}{l}</button>
+        ))}
       </div>
       <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden" }}>
         {filtered.length===0?<div style={{ padding:40,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີ</div>:filtered.map((s,i)=>{
