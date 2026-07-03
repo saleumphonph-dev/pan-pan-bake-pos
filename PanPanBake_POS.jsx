@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.03-1";
+const BUILD_VERSION = "2026.07.03-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -815,7 +815,10 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
   };
 
   const addToCart = (item, selectedAddons, sweetness) => {
-    const newItem = { ...item, addons: selectedAddons, ...(sweetness ? { sweetness } : {}) };
+    // Drop the menu photo (base64, up to ~1MB) — it must NOT be copied into the sale
+    // record, or every bill balloons to hundreds of KB and sync/history breaks.
+    const { image, ...lean } = item;
+    const newItem = { ...lean, addons: selectedAddons, ...(sweetness ? { sweetness } : {}) };
     const key = cartKey(newItem);
     setCart(prev => {
       const ex = prev.find(c => cartKey(c) === key);
@@ -841,7 +844,7 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
     if (cart.length === 0) return;
     const order = {
       id: genId(), date: new Date().toISOString(),
-      items: cart, total: subtotal, discount, payment: p,
+      items: cart.map(({ image, ...c }) => c), total: subtotal, discount, payment: p, // never store menu photos in a bill
       received: p==="cash" ? Number(received) : null,
       note: p==="foc" ? (focReason || "FOC") : note,
       cashier, shiftId: currentShift?.id, voided: false,
@@ -2664,6 +2667,20 @@ export default function App() {
 
   // Auto-save parked
   useEffect(() => { stor.set("parked", parkedOrders); }, [parkedOrders]);
+
+  // One-time cleanup: older builds copied each menu item's base64 photo into every
+  // bill, bloating rows to hundreds of KB and breaking sync/history loading. Strip
+  // those photos out of any locally-stored bills on load (the cloud is cleaned too).
+  useEffect(() => {
+    const cur = stor.get("sales", []);
+    let changed = false;
+    const lean = cur.map(o => {
+      if (!(o.items && o.items.some(i => i && i.image))) return o;
+      changed = true;
+      return { ...o, items: o.items.map(({ image, ...i }) => i) };
+    });
+    if (changed) { stor.set("sales", lean); setSales(lean); }
+  }, []); // run once on mount
 
   // Persist login session (null on logout) so reloads keep the user signed in.
   useEffect(() => { stor.set("session", role); }, [role]);
