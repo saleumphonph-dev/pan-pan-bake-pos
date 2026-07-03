@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.03-3";
+const BUILD_VERSION = "2026.07.03-4";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -253,7 +253,7 @@ function printReceipt(order, shopInfo) {
     const unit = itemPrice(it);
     // English name on top (larger); Lao name + unit×qty inline underneath (smaller).
     return `<tr>
-      <td style="padding:4px 0"><span class="iname">${it.name}</span><br><small>${it.nameLao} [${formatKip(unit)} × ${it.qty}]</small>${sweetText ? `<br><small>${sweetText}</small>` : ""}${addonText ? `<br><small>${addonText}</small>` : ""}</td>
+      <td style="padding:4px 0"><span class="iname">${it.name}</span><br><small>${it.nameLao}</small> <span class="unit">${formatKip(unit)} × ${it.qty}</span>${sweetText ? `<br><small>${sweetText}</small>` : ""}${addonText ? `<br><small>${addonText}</small>` : ""}</td>
       <td style="text-align:right;padding:4px 0;vertical-align:top;white-space:nowrap">${formatKip(unit * it.qty)}</td>
     </tr>`;
   }).join("");
@@ -300,6 +300,7 @@ function printReceipt(order, shopInfo) {
   #ppb-print-root .items{width:100%;border-collapse:collapse;padding:8px 0;}
   #ppb-print-root .items td{font-size:${F.item}px;vertical-align:top;}
   #ppb-print-root .items .iname{font-size:${F.item + 4}px;}
+  #ppb-print-root .items .unit{font-size:${F.item}px;white-space:nowrap;}
   #ppb-print-root .items tr.ihead td{border-bottom:1px solid #000;padding-bottom:3px;}
   #ppb-print-root .divider{border-top:1px dashed #000;margin:6px 0;}
   #ppb-print-root .remark{padding:8px 10px;margin:6px 0;border:2px solid #000;}
@@ -1757,6 +1758,7 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
   const [statusFilter,setStatusFilter]=useState("all");
   const [excludeVoid,setExcludeVoid]=useState(false);
   const [excludeFoc,setExcludeFoc]=useState(false);
+  const [sortDir,setSortDir]=useState("desc"); // desc = newest first, asc = oldest first
   const [voidTarget,setVoidTarget]=useState(null);
   // Upload status: ids in "pendingSales" failed to reach the cloud (offline). Poll
   // localStorage (free — no DB query) so the per-row dots update as they upload.
@@ -1798,7 +1800,7 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
       if(dateTo&&sDate>dateTo)return false;
     }
     return true;
-  }).sort((a,b)=>new Date(b.date)-new Date(a.date));
+  }).sort((a,b)=> sortDir==="asc" ? new Date(a.date)-new Date(b.date) : new Date(b.date)-new Date(a.date));
   const filtered=filteredAll.slice(0,150); // cap the on-screen list; print uses the full set
 
   const STATUS_CHIPS=[["all","ທັງໝົດ"],["cash","💵 ສົດ"],["qr","📲 QR"],["transfer","🏦 ໂອນ"],["foc","🎁 FOC"],["void","🚫 ຍົກເລີກ"]];
@@ -1823,19 +1825,29 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
     const label = (dateFrom||dateTo)
       ? `${dateFrom||"..."} → ${dateTo||"..."}`
       : (statusFilter!=="all"? (STATUS_CHIPS.find(c=>c[0]===statusFilter)?.[1]||statusFilter) : "ທັງໝົດ / All");
-    const asc=[...filteredAll].reverse(); // oldest → newest for a log
-    const rows=asc.map(s=>{
-      const net=s.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0)-(s.discount||0);
+    const net=(s)=>s.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0)-(s.discount||0);
+    const rows=filteredAll.map(s=>{          // in the same order as on screen (sort toggle)
       const items=s.items.map(it=>`${esc(it.name)}×${it.qty}`).join(", ");
       const pay=s.payment==="cash"?"ສົດ":s.payment==="qr"?"QR":s.payment==="transfer"?"ໂອນ":"FOC";
-      return `<tr${s.voided?' style="color:#b91c1c"':''}><td>${fmtDT(s.date)}</td><td>#${esc(s.id.toUpperCase())}${s.voided?" (VOID)":""}</td><td>${esc(s.cashier||"—")}</td><td>${items}</td><td>${esc((s.note||"").replace(/\n/g," / "))}</td><td>${pay}</td><td class="num">${s.voided?"—":formatKip(net)}</td></tr>`;
+      return `<tr${s.voided?' style="color:#b91c1c"':''}><td>${fmtDT(s.date)}</td><td>#${esc(s.id.toUpperCase())}${s.voided?" (VOID)":""}</td><td>${esc(s.cashier||"—")}</td><td>${items}</td><td>${esc((s.note||"").replace(/\n/g," / "))}</td><td>${pay}</td><td class="num">${s.voided?"—":formatKip(net(s))}</td></tr>`;
     }).join("");
-    const totalRev=filteredAll.filter(s=>!s.voided&&s.payment!=="foc").reduce((a,s)=>a+(s.items.reduce((x,it)=>x+itemPrice(it)*it.qty,0)-(s.discount||0)),0);
+    // Categorise by payment type
+    const nonVoid=filteredAll.filter(s=>!s.voided);
+    const grp=(p)=>{ const a=nonVoid.filter(s=>s.payment===p); return {n:a.length,sum:a.reduce((x,s)=>x+net(s),0)}; };
+    const cash=grp("cash"),qr=grp("qr"),tr=grp("transfer"),foc=grp("foc");
+    const voidN=filteredAll.filter(s=>s.voided).length;
+    const totalRev=cash.sum+qr.sum+tr.sum; // excludes FOC + void
     const html=`<h1>ປະຫວັດການຂາຍ / Sales History</h1>
     <div class="sub">${esc(label)} &nbsp;·&nbsp; ${filteredAll.length} ໃບ / bills &nbsp;·&nbsp; ພິມ ${new Date().toLocaleString("en-GB")}</div>
+    <table><thead><tr><th>ປະເພດການຈ່າຍ / Payment type</th><th class="num">ໃບ / Bills</th><th class="num">ຈຳນວນ / Amount</th></tr></thead><tbody>
+      <tr><td>💵 ເງິນສົດ / Cash</td><td class="num">${cash.n}</td><td class="num">${formatKip(cash.sum)}</td></tr>
+      <tr><td>📲 QR</td><td class="num">${qr.n}</td><td class="num">${formatKip(qr.sum)}</td></tr>
+      <tr><td>🏦 ໂອນ / Transfer</td><td class="num">${tr.n}</td><td class="num">${formatKip(tr.sum)}</td></tr>
+      <tr><td>🎁 FOC / ຟຣີ</td><td class="num">${foc.n}</td><td class="num">—</td></tr>
+      <tr><td>🚫 ຍົກເລີກ / Void</td><td class="num">${voidN}</td><td class="num">—</td></tr>
+    </tbody><tfoot><tr><th>ລວມຂາຍສຸດທິ (ສົດ+QR+ໂອນ) / Net sales</th><th class="num">${cash.n+qr.n+tr.n}</th><th class="num">${formatKip(totalRev)}</th></tr></tfoot></table>
     <table><thead><tr><th>ວັນທີ/ເວລາ / Date-Time</th><th>ໃບບິນ / Bill</th><th>ພະນັກງານ / Cashier</th><th>ສິນຄ້າ / Items</th><th>ລູກຄ້າ / Customer</th><th>ຈ່າຍ / Pay</th><th class="num">ລວມ / Total</th></tr></thead>
-    <tbody>${rows||`<tr><td colspan="7">ບໍ່ມີ / No data</td></tr>`}</tbody>
-    <tfoot><tr><th colspan="6">ລວມຂາຍ (ບໍ່ລວມ void/FOC) / Net sales</th><th class="num">${formatKip(totalRev)}</th></tr></tfoot></table>`;
+    <tbody>${rows||`<tr><td colspan="7">ບໍ່ມີ / No data</td></tr>`}</tbody></table>`;
     setTimeout(()=>printReport(html),50);
   };
 
@@ -1890,6 +1902,10 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
             border:on?"none":"1px solid #e5e7eb", background:on?"#dc2626":"#fff", color:on?"#fff":"#374151"
           }}>{on?"✓ ":""}{l}</button>
         ))}
+        <button onClick={()=>setSortDir(d=>d==="desc"?"asc":"desc")} style={{
+          marginLeft:"auto",padding:"6px 12px",borderRadius:20,cursor:"pointer",fontSize:12,fontWeight:600,whiteSpace:"nowrap",
+          border:"1px solid #e5e7eb",background:"#fff",color:"#374151"
+        }}>{sortDir==="desc"?"🔽 ໃໝ່ສຸດກ່ອນ / Newest first":"🔼 ເກົ່າສຸດກ່ອນ / Oldest first"}</button>
       </div>
       <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden" }}>
         {filtered.length===0?<div style={{ padding:40,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີ</div>:filtered.map((s,i)=>{
