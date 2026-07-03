@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.03-4";
+const BUILD_VERSION = "2026.07.03-5";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1390,7 +1390,7 @@ function DashboardView({ sales }) {
   }
 
   const filtered = sales.filter(s => {
-    if (s.voided || s.payment === "foc") return false;
+    if (s.deleted || s.voided || s.payment === "foc") return false;
     const d = new Date(s.date);
     return d >= rangeStart && d <= rangeEnd;
   });
@@ -1402,7 +1402,7 @@ function DashboardView({ sales }) {
   const qrSales      = filtered.filter(o=>o.payment==="qr").reduce((s,o)=>s+orderNet(o),0);
   const transferSales= filtered.filter(o=>o.payment==="transfer").reduce((s,o)=>s+orderNet(o),0);
   const focCount = sales.filter(s => {
-    if (s.payment !== "foc") return false;
+    if (s.deleted || s.payment !== "foc") return false;
     const d = new Date(s.date);
     return d >= rangeStart && d <= rangeEnd;
   }).length;
@@ -1751,7 +1751,7 @@ function AccountingView({ sales }) {
 // ============================================================
 // SALES HISTORY
 // ============================================================
-function SalesHistoryView({ sales, setSales, shopInfo }) {
+function SalesHistoryView({ sales, setSales, shopInfo, role }) {
   const [search,setSearch]=useState("");
   const [dateFrom,setDateFrom]=useState("");
   const [dateTo,setDateTo]=useState("");
@@ -1772,6 +1772,16 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
     setSales(updated); stor.set("sales",updated); setVoidTarget(null);
     syncOrder(voidedOrder).then(ok=>markPending(order.id,ok)).catch(()=>markPending(order.id,false));
   };
+  // Owner-only: permanently remove a VOIDED bill (e.g. test transactions). Marked
+  // deleted + synced (kept as a hidden tombstone) so it disappears on every device.
+  const deleteBill=(order)=>{
+    if(!order.voided){alert("ຕ້ອງ ຍົກເລີກ ກ່ອນ ຈຶ່ງລຶບໄດ້ / Void the bill first, then it can be removed.");return;}
+    if(!window.confirm(`ລຶບໃບບິນ #${order.id.toUpperCase()} ຖາວອນ?\nຈະຫາຍໄປຈາກທຸກເຄື່ອງ (ສະເພາະໃບຍົກເລີກ).\nPermanently remove this VOID bill from all devices?`))return;
+    const del={...order,deleted:true};
+    const updated=sales.map(s=>s.id===order.id?del:s); // keep as tombstone (filtered from all views)
+    setSales(updated); stor.set("sales",updated);
+    syncOrder(del).then(ok=>markPending(order.id,ok)).catch(()=>markPending(order.id,false));
+  };
 
   const passStatus=(s)=>{
     if(statusFilter==="all")return true;
@@ -1782,6 +1792,7 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
   // Reliable newest-first order (sorted by date/time — the merge/Map order isn't
   // guaranteed chronological once bills arrive from multiple devices).
   const filteredAll=sales.filter(s=>{
+    if(s.deleted)return false; // removed bills are hidden everywhere
     // Text search: bill ID, item name (EN/Lao), or the customer remark (note)
     const q=search.trim().toLowerCase();
     const matchesSearch=q===""
@@ -1938,6 +1949,7 @@ function SalesHistoryView({ sales, setSales, shopInfo }) {
               <div style={{ display:"flex",gap:4 }}>
                 <button onClick={()=>setTimeout(()=>printReceipt(s,shopInfo),50)} title="ພິມ" style={{ padding:"5px 8px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>🖨️</button>
                 {!isVoid&&<button onClick={()=>setVoidTarget(s)} title="ຍົກເລີກ" style={{ padding:"5px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>⚠️</button>}
+                {isVoid&&role==="owner"&&<button onClick={()=>deleteBill(s)} title="ລຶບຖາວອນ / Remove (owner)" style={{ padding:"5px 8px",background:"#dc2626",color:"#fff",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>🗑️</button>}
               </div>
             </div>
           );
@@ -2516,7 +2528,7 @@ function ReportView({ sales }) {
     setAnchor(d);
   };
 
-  const per=sales.filter(s=>{const d=new Date(s.date);return d>=start&&d<=end;});
+  const per=sales.filter(s=>{ if(s.deleted)return false; const d=new Date(s.date);return d>=start&&d<=end;});
   const valid=per.filter(s=>!s.voided&&s.payment!=="foc");
   const revenue=valid.reduce((s,o)=>s+orderNet(o),0);
   const bills=valid.length;
@@ -2887,7 +2899,7 @@ export default function App() {
       {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
       {view==="dashboard"&&<DashboardView sales={sales} />}
       {view==="report"&&<ReportView sales={sales} />}
-      {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
+      {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
       {view==="accounting"&&<AccountingView sales={sales} />}
       {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
     </div>
@@ -2915,7 +2927,7 @@ export default function App() {
         {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
         {view==="dashboard"&&<DashboardView sales={sales} />}
       {view==="report"&&<ReportView sales={sales} />}
-        {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} />}
+        {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
         {view==="accounting"&&<AccountingView sales={sales} />}
         {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
       </div>

@@ -25,6 +25,7 @@ export async function syncOrder(order) {
       voided:      order.voided    ?? false,
       void_reason: order.voidReason?? null,
       parked_name: order.parkedName?? null,
+      deleted:     order.deleted    ?? false,
       updated_at:  new Date().toISOString(),
     });
     return !error;
@@ -112,6 +113,7 @@ export async function fetchSalesSince(since) {
       voided:     r.voided ?? false,
       voidReason: r.void_reason,
       parkedName: r.parked_name,
+      deleted:    r.deleted ?? false,
     })),
   };
 }
