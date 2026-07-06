@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.03-5";
+const BUILD_VERSION = "2026.07.03-6";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -148,6 +148,31 @@ const stor = {
   get: (k, def) => { try { const v = localStorage.getItem("ppb_" + k); return v ? JSON.parse(v) : def; } catch { return def; } },
   set: (k, v) => { try { localStorage.setItem("ppb_" + k, JSON.stringify(v)); } catch {} },
 };
+
+// Pleasant two-note "cha-ching" chime on a completed sale (Web Audio — no file to
+// bundle/host). Called from a button tap, which satisfies mobile autoplay rules.
+// Toggle via stor "soundOn" (default on). Never throws.
+let _saleAudioCtx = null;
+function playSaleSound() {
+  try {
+    if (!stor.get("soundOn", true)) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    _saleAudioCtx = _saleAudioCtx || new AC();
+    const ctx = _saleAudioCtx;
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+    [[988, 0], [1319, 0.11]].forEach(([freq, t]) => { // B5 → E6, bell-like
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.type = "sine"; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.0001, t0 + t);
+      gain.gain.exponentialRampToValueAtTime(0.35, t0 + t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + t + 0.4);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t0 + t); osc.stop(t0 + t + 0.45);
+    });
+  } catch (e) {}
+}
 
 // ============================================================
 // PRINT RECEIPT
@@ -852,6 +877,7 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
       parkedName: parkedName || null,
     };
     onSale(order);
+    playSaleSound(); // 🔔 chime on a completed sale
     setReceipt(order);
     // remove from parked if this was a resumed order
     if (parkedId) setParkedOrders(parkedOrders.filter(p => p.id !== parkedId));
@@ -1977,6 +2003,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
   const [addonForm,setAddonForm]=useState({name:"",nameLao:"",price:"",group:"milk"});
   const [shopForm,setShopForm]=useState(shopInfo);
   const [printerCfg,setPrinterCfg]=useState(()=>stor.get("printerConfig",PRINTER_DEFAULT));
+  const [,setSoundTick]=useState(0); // force re-render when the sale-sound toggle changes
   const fileRef=useRef(null); const editFileRef=useRef(null); const qrRef=useRef(null); const logoRef=useRef(null);
 
   const savePrinter=(patch)=>{ const next={...stor.get("printerConfig",PRINTER_DEFAULT),...patch}; setPrinterCfg(next); stor.set("printerConfig",next); };
@@ -2353,6 +2380,21 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
                   <button onClick={()=>setPw(pw + PRINT_WIDTH_STEP)} style={{ width:46,height:46,borderRadius:10,border:"1px solid #e5e7eb",background:"#fff",fontSize:22,fontWeight:700,cursor:"pointer" }}>＋</button>
                   <button onClick={()=>setPw(PRINTER_DEFAULT.printWidth)} title="Reset" style={{ padding:"0 12px",height:46,borderRadius:10,border:"1px solid #e5e7eb",background:"#fff",fontSize:12,fontWeight:600,cursor:"pointer",color:"#6b7280" }}>↺</button>
                 </div>
+              </div>
+            );
+          })()}
+
+          {/* Sale sound toggle */}
+          {(() => {
+            const on = stor.get("soundOn", true);
+            return (
+              <div style={{ marginBottom:20 }}>
+                <div style={{ fontSize:13,fontWeight:600,marginBottom:8 }}>🔔 ສຽງເມື່ອຂາຍ / Sale sound</div>
+                <div style={{ display:"flex",gap:8 }}>
+                  <button onClick={()=>{ stor.set("soundOn",!on); setSoundTick(t=>t+1); if(!on)playSaleSound(); }} style={{ flex:1,padding:"12px 10px",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:700,border:"none",background:on?"#16a34a":"#e5e7eb",color:on?"#fff":"#374151" }}>{on?"🔔 ເປີດ / On":"🔕 ປິດ / Off"}</button>
+                  <button onClick={playSaleSound} style={{ padding:"12px 16px",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:600,border:"1px solid #e5e7eb",background:"#fff",color:"#374151" }}>▶️ ທົດສອບສຽງ / Test</button>
+                </div>
+                <div style={{ fontSize:11,color:"#9ca3af",marginTop:6 }}>ດັງໃນເຄື່ອງນີ້ ເມື່ອກົດຂາຍສຳເລັດ · Plays on this device when a sale is completed.</div>
               </div>
             );
           })()}
