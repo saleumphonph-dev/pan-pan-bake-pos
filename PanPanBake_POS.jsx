@@ -9,7 +9,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.03-6";
+const BUILD_VERSION = "2026.07.03-7";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -2399,6 +2399,27 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             );
           })()}
 
+          {/* Cross-device new-sale alert */}
+          {(() => {
+            const on = stor.get("alertOn", true);
+            const perm = (typeof Notification!=="undefined") ? Notification.permission : "unsupported";
+            return (
+              <div style={{ marginBottom:20 }}>
+                <div style={{ fontSize:13,fontWeight:600,marginBottom:8 }}>📣 ແຈ້ງເຕືອນຂາຍ (ຈາກເຄື່ອງອື່ນ) / Sale alerts <span style={{ fontWeight:400,color:"#9ca3af" }}>(from other devices)</span></div>
+                <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+                  <button onClick={()=>{ const nv=!on; stor.set("alertOn",nv); setSoundTick(t=>t+1); if(nv&&typeof Notification!=="undefined"&&Notification.permission==="default"){Notification.requestPermission().then(()=>setSoundTick(t=>t+1));} }} style={{ flex:1,minWidth:120,padding:"12px 10px",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:700,border:"none",background:on?"#16a34a":"#e5e7eb",color:on?"#fff":"#374151" }}>{on?"📣 ເປີດ / On":"🔕 ປິດ / Off"}</button>
+                  {on && perm!=="granted" && perm!=="unsupported" && (
+                    <button onClick={()=>Notification.requestPermission().then(()=>setSoundTick(t=>t+1))} style={{ padding:"12px 14px",borderRadius:10,cursor:"pointer",fontSize:12,fontWeight:600,border:"1px solid #f59e0b",background:"#fffbeb",color:"#b45309" }}>🔔 ອະນຸຍາດແຈ້ງເຕືອນ / Allow notifications</button>
+                  )}
+                </div>
+                <div style={{ fontSize:11,color:"#9ca3af",marginTop:6,lineHeight:1.5 }}>
+                  ເມື່ອເຄື່ອງອື່ນຂາຍ ຈະແຈ້ງເຕືອນຢູ່ໜ້າຈໍ + ສຽງ. ຖ້າອະນຸຍາດແຈ້ງເຕືອນ ຈະເຫັນເຖິງແມ່ນເປີດແອັບຄ້າງໄວ້ໃນພື້ນຫຼັງ.<br/>
+                  Alerts on screen + sound when another device makes a sale. {perm==="granted"?"✓ OS notifications allowed.":perm==="denied"?"OS notifications blocked in browser settings.":""}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Test print */}
           <button onClick={testPrint} style={{ width:"100%",padding:14,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:20 }}>
             🧾 ທົດສອບພິມ / Test Print
@@ -2719,6 +2740,18 @@ export default function App() {
   const [shopInfo,setShopInfo]=useState(()=>stor.get("shopInfo",DEFAULT_SHOP_INFO));
   const [parkedOrders,setParkedOrders]=useState(()=>stor.get("parked",[]));
   const [shiftModal,setShiftModal]=useState(null);
+  // Cross-device "new sale" alert: track every sale id we've already seen so a sale
+  // rung up on ANOTHER device pops an alert here (on-screen + sound + OS notification).
+  const seenSaleIds = useRef(null);       // Set, lazily seeded on the first sync
+  const [saleAlert,setSaleAlert] = useState(null); // { text } | null
+  const notifySale = (r) => {
+    if (!stor.get("alertOn", true)) return;
+    const netv = r.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0) - (r.discount||0);
+    const text = `${formatKip(netv)}${r.cashier?` · ${r.cashier}`:""}`;
+    setSaleAlert({ text, t: Date.now() });
+    playSaleSound();
+    try { if ("Notification" in window && Notification.permission === "granted") new Notification("🔔 ຂາຍໃໝ່ / New sale", { body: text, tag: r.id }); } catch {}
+  };
   const [layoutMode,setLayoutMode]=useState(()=>stor.get("layoutMode","auto"));
   const vp = useWindowSize();
   const autoMode = vp.isMobile ? "phone" : vp.isTablet ? "tablet" : "desktop";
@@ -2769,6 +2802,9 @@ export default function App() {
 
   // Persist login session (null on logout) so reloads keep the user signed in.
   useEffect(() => { stor.set("session", role); }, [role]);
+
+  // Auto-dismiss the on-screen "new sale" alert after a few seconds.
+  useEffect(() => { if (!saleAlert) return; const id = setTimeout(() => setSaleAlert(null), 7000); return () => clearTimeout(id); }, [saleAlert]);
 
   // Cloud sync — INCREMENTAL to keep egress tiny (the old code re-downloaded the
   // whole sales table every 10s per device, which blew past Supabase's free 5GB
@@ -2830,6 +2866,20 @@ export default function App() {
       if (cset && cset.dataPurgedAt) { purgedAt = cset.dataPurgedAt.value; stor.set("dataPurgedAt", purgedAt); }
       const purgeMs = purgedAt ? new Date(purgedAt).getTime() : 0;
       if (cs) {
+        // Alert for sales that just arrived from ANOTHER device. Skip the very first
+        // sync (seeds the "seen" set from all current rows so history doesn't alert).
+        if (seenSaleIds.current === null) {
+          seenSaleIds.current = new Set([...stor.get("sales", []).map(s => s.id), ...cs.rows.map(r => r.id)]);
+        } else {
+          const nowMs = Date.now();
+          cs.rows.forEach(r => {
+            if (seenSaleIds.current.has(r.id)) return;
+            seenSaleIds.current.add(r.id);
+            if (r.voided || r.deleted) return;
+            const age = nowMs - new Date(r.date).getTime();
+            if (age >= 0 && age < 5 * 60 * 1000) notifySale(r); // a fresh sale from elsewhere
+          });
+        }
         const merged = mergeChanges(stor.get("sales", []), cs.rows, "date", purgeMs);
         stor.set("sales", merged); setSales(merged);
         if (cs.cursor) stor.set("salesCursor", cs.cursor);
@@ -2864,7 +2914,7 @@ export default function App() {
   const markPending=(listKey,id,ok)=>{ const p=stor.get(listKey,[]); if(ok){stor.set(listKey,p.filter(x=>x!==id));} else if(!p.includes(id)){stor.set(listKey,[...p,id]);} };
   const pushOrder=(o)=>{ syncOrder(o).then(ok=>markPending("pendingSales",o.id,ok)).catch(()=>markPending("pendingSales",o.id,false)); };
   const pushShift=(s)=>{ syncShift(s).then(ok=>markPending("pendingShifts",s.id,ok)).catch(()=>markPending("pendingShifts",s.id,false)); };
-  const addSale=(o)=>{ const u=[...sales,o];setSales(u);stor.set("sales",u);pushOrder(o); };
+  const addSale=(o)=>{ if(seenSaleIds.current)seenSaleIds.current.add(o.id); const u=[...sales,o];setSales(u);stor.set("sales",u);pushOrder(o); };
   const updateSale=(o)=>{ const u=sales.map(s=>s.id===o.id?o:s);setSales(u);stor.set("sales",u);pushOrder(o); };
   const openShift=({cash,notes})=>{ const s={id:genId(),openedAt:new Date().toISOString(),openingCash:cash,cashier:ROLES[role].label,notes};const u=[...shifts,s];setShifts(u);stor.set("shifts",u);pushShift(s);setShiftModal(null); };
   const closeShift=({cash,notes,expected})=>{ const u=shifts.map(s=>s.id===currentShift.id?{...s,closedAt:new Date().toISOString(),closingCash:cash,expectedCash:expected,variance:cash-expected,notes:(s.notes?s.notes+" | ":"")+(notes||"")}:s);setShifts(u);stor.set("shifts",u);pushShift(u.find(s=>s.id===currentShift.id));setShiftModal(null); };
@@ -2937,6 +2987,14 @@ export default function App() {
     <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden" }}>
       <UpdateBanner />
       <OfflineBanner />
+      {saleAlert && (
+        <div onClick={()=>setSaleAlert(null)} style={{
+          position:"fixed", top:16, left:"50%", transform:"translateX(-50%)", zIndex:1000,
+          background:"#16a34a", color:"#fff", fontFamily:"'Noto Sans Lao',sans-serif",
+          padding:"12px 20px", borderRadius:12, boxShadow:"0 6px 20px rgba(0,0,0,0.25)",
+          fontSize:15, fontWeight:700, cursor:"pointer", maxWidth:"92%", textAlign:"center",
+        }}>🔔 ຂາຍໃໝ່ / New sale &nbsp;·&nbsp; {saleAlert.text}</div>
+      )}
       {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
       {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
       {view==="dashboard"&&<DashboardView sales={sales} />}
