@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
 import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchSettings, syncSetting } from "./src/lib/supabase.js";
+import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from "./src/lib/push.js";
 
 // ============================================================
 // CONSTANTS
@@ -9,7 +10,7 @@ import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSinc
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.03-7";
+const BUILD_VERSION = "2026.07.07-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -148,6 +149,13 @@ const stor = {
   get: (k, def) => { try { const v = localStorage.getItem("ppb_" + k); return v ? JSON.parse(v) : def; } catch { return def; } },
   set: (k, v) => { try { localStorage.setItem("ppb_" + k, JSON.stringify(v)); } catch {} },
 };
+
+// Stable per-device id (for push subscriptions — so a device isn't pushed its own sale).
+function getDeviceId() {
+  let id = stor.get("deviceId", null);
+  if (!id) { id = "dev-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); stor.set("deviceId", id); }
+  return id;
+}
 
 // Pleasant two-note "cha-ching" chime on a completed sale (Web Audio — no file to
 // bundle/host). Called from a button tap, which satisfies mobile autoplay rules.
@@ -2003,7 +2011,8 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
   const [addonForm,setAddonForm]=useState({name:"",nameLao:"",price:"",group:"milk"});
   const [shopForm,setShopForm]=useState(shopInfo);
   const [printerCfg,setPrinterCfg]=useState(()=>stor.get("printerConfig",PRINTER_DEFAULT));
-  const [,setSoundTick]=useState(0); // force re-render when the sale-sound toggle changes
+  const [,setSoundTick]=useState(0); // force re-render when the sale-sound / alert toggles change
+  const [pushMsg,setPushMsg]=useState("");
   const fileRef=useRef(null); const editFileRef=useRef(null); const qrRef=useRef(null); const logoRef=useRef(null);
 
   const savePrinter=(patch)=>{ const next={...stor.get("printerConfig",PRINTER_DEFAULT),...patch}; setPrinterCfg(next); stor.set("printerConfig",next); };
@@ -2420,6 +2429,34 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             );
           })()}
 
+          {/* Closed-app push notifications */}
+          {(() => {
+            const on = stor.get("pushOn", false);
+            const supported = pushSupported();
+            return (
+              <div style={{ marginBottom:20 }}>
+                <div style={{ fontSize:13,fontWeight:600,marginBottom:8 }}>📲 Push (ເຖິງແມ່ນປິດແອັບ) / Push when app is closed</div>
+                {!supported ? (
+                  <div style={{ fontSize:12,color:"#b45309",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"10px 12px" }}>
+                    ⚠️ ເຄື່ອງນີ້ບໍ່ຮອງຮັບ Push. ສຳລັບ iPhone: ຕ້ອງ “Add to Home Screen” ກ່ອນ (iOS 16.4+).<br/>
+                    Not supported here. On iPhone, first <b>Add to Home Screen</b> and open from there (iOS 16.4+).
+                  </div>
+                ) : (
+                  <>
+                    <button onClick={async()=>{
+                      setPushMsg("… ກຳລັງຕັ້ງຄ່າ / setting up…");
+                      if(on){ await disablePush(getDeviceId()); stor.set("pushOn",false); setPushMsg("ປິດແລ້ວ / Push turned off."); }
+                      else { const r=await enablePush(getDeviceId(), navigator.platform||null); if(r.ok){ stor.set("pushOn",true); setPushMsg("✓ ເປີດແລ້ວ! ເຄື່ອງນີ້ຈະໄດ້ຮັບ push ເມື່ອມີການຂາຍ / Enabled — this device will get a push on every sale."); } else { setPushMsg(r.error==="denied"?"❌ ຖືກປະຕິເສດ (ອະນຸຍາດແຈ້ງເຕືອນໃນ browser ກ່ອນ) / Notification permission denied.":"❌ ຕັ້ງຄ່າບໍ່ໄດ້: "+r.error); } }
+                      setSoundTick(t=>t+1);
+                    }} style={{ width:"100%",padding:"12px 10px",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:700,border:"none",background:on?"#16a34a":"#e5e7eb",color:on?"#fff":"#374151" }}>{on?"📲 ເປີດຢູ່ / Push ON (tap to turn off)":"📲 ເປີດ Push / Enable push on this device"}</button>
+                    {pushMsg && <div style={{ fontSize:12,color:"#374151",marginTop:8,background:"#f3f4f6",borderRadius:8,padding:"8px 10px",lineHeight:1.5 }}>{pushMsg}</div>}
+                  </>
+                )}
+                <div style={{ fontSize:11,color:"#9ca3af",marginTop:6,lineHeight:1.5 }}>ໄດ້ຮັບແຈ້ງເຕືອນເຖິງແມ່ນປິດແອັບ. ຕ້ອງເປີດຢູ່ແຕ່ລະເຄື່ອງ · Get notified even when the app is closed. Enable once per device.</div>
+              </div>
+            );
+          })()}
+
           {/* Test print */}
           <button onClick={testPrint} style={{ width:"100%",padding:14,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:20 }}>
             🧾 ທົດສອບພິມ / Test Print
@@ -2806,6 +2843,10 @@ export default function App() {
   // Auto-dismiss the on-screen "new sale" alert after a few seconds.
   useEffect(() => { if (!saleAlert) return; const id = setTimeout(() => setSaleAlert(null), 7000); return () => clearTimeout(id); }, [saleAlert]);
 
+  // If closed-app push was enabled on this device, refresh the subscription on load
+  // (subscriptions can rotate/expire).
+  useEffect(() => { if (stor.get("pushOn", false)) ensurePush(getDeviceId()); }, []);
+
   // Cloud sync — INCREMENTAL to keep egress tiny (the old code re-downloaded the
   // whole sales table every 10s per device, which blew past Supabase's free 5GB
   // egress quota and got the project blocked). Now each poll only downloads rows
@@ -2914,7 +2955,13 @@ export default function App() {
   const markPending=(listKey,id,ok)=>{ const p=stor.get(listKey,[]); if(ok){stor.set(listKey,p.filter(x=>x!==id));} else if(!p.includes(id)){stor.set(listKey,[...p,id]);} };
   const pushOrder=(o)=>{ syncOrder(o).then(ok=>markPending("pendingSales",o.id,ok)).catch(()=>markPending("pendingSales",o.id,false)); };
   const pushShift=(s)=>{ syncShift(s).then(ok=>markPending("pendingShifts",s.id,ok)).catch(()=>markPending("pendingShifts",s.id,false)); };
-  const addSale=(o)=>{ if(seenSaleIds.current)seenSaleIds.current.add(o.id); const u=[...sales,o];setSales(u);stor.set("sales",u);pushOrder(o); };
+  const addSale=(o)=>{
+    if(seenSaleIds.current)seenSaleIds.current.add(o.id);
+    const u=[...sales,o];setSales(u);stor.set("sales",u);pushOrder(o);
+    // Push to OTHER devices (even if their app is closed). Fire-and-forget.
+    const net=o.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0)-(o.discount||0);
+    sendSalePush({ title:"🔔 ຂາຍໃໝ່ / New sale", body:`${formatKip(net)}${o.cashier?` · ${o.cashier}`:""}`, fromDeviceId:getDeviceId() });
+  };
   const updateSale=(o)=>{ const u=sales.map(s=>s.id===o.id?o:s);setSales(u);stor.set("sales",u);pushOrder(o); };
   const openShift=({cash,notes})=>{ const s={id:genId(),openedAt:new Date().toISOString(),openingCash:cash,cashier:ROLES[role].label,notes};const u=[...shifts,s];setShifts(u);stor.set("shifts",u);pushShift(s);setShiftModal(null); };
   const closeShift=({cash,notes,expected})=>{ const u=shifts.map(s=>s.id===currentShift.id?{...s,closedAt:new Date().toISOString(),closingCash:cash,expectedCash:expected,variance:cash-expected,notes:(s.notes?s.notes+" | ":"")+(notes||"")}:s);setShifts(u);stor.set("shifts",u);pushShift(u.find(s=>s.id===currentShift.id));setShiftModal(null); };
