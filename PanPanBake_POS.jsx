@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.07-1";
+const BUILD_VERSION = "2026.07.07-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -2070,7 +2070,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
       <h1 style={{ margin:"0 0 4px",fontSize:22,fontWeight:700 }}>⚙️ ຈັດການລະບົບ</h1>
       <div style={{ fontSize:13,color:"#6b7280",marginBottom:16 }}>Admin Settings</div>
       <div style={{ display:"flex",gap:4,marginBottom:16,background:"#fff",padding:4,borderRadius:10,width:"fit-content",flexWrap:"wrap" }}>
-        {[["menu","🍞 ເມນູ"],["categories","📂 ໝວດ"],["addons","✨ Add-ons"],["settings","🏪 ຮ້ານ"],["qr","📲 QR"],["printer","🖨️ ເຄື່ອງພິມ"],...(role==="owner"?[["system","⚙️ ລະບົບ"]]:[])].map(([v,l])=>(
+        {[["menu","🍞 ເມນູ"],["categories","📂 ໝວດ"],["addons","✨ Add-ons"],["settings","🏪 ຮ້ານ"],["qr","📲 QR"],["printer","🖨️ ເຄື່ອງພິມ"],["notify","🔔 ແຈ້ງເຕືອນ"],...(role==="owner"?[["system","⚙️ ລະບົບ"]]:[])].map(([v,l])=>(
           <button key={v} onClick={()=>setTab(v)} style={{ padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",background:tab===v?"#1a1a2e":"transparent",color:tab===v?"#f4d03f":"#374151",fontWeight:tab===v?700:500,fontSize:13 }}>{l}</button>
         ))}
       </div>
@@ -2393,6 +2393,34 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             );
           })()}
 
+          {/* Test print */}
+          <button onClick={testPrint} style={{ width:"100%",padding:14,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:20 }}>
+            🧾 ທົດສອບພິມ / Test Print
+          </button>
+
+          {/* Setup guide */}
+          <div style={{ background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:14 }}>
+            <div style={{ fontSize:13,fontWeight:700,color:"#1d4ed8",marginBottom:8 }}>📲 ການຕັ້ງຄ່າຄັ້ງທຳອິດ / One-time setup on the tablet</div>
+            <ol style={{ margin:0,paddingLeft:18,fontSize:12,color:"#374151",lineHeight:1.9 }}>
+              <li>ຕິດຕັ້ງແອັບ <b>RawBT</b> ຈາກ Google Play / Install <b>RawBT</b> from Google Play.</li>
+              <li>ເປີດ Bluetooth ຂອງແທັບເລັດ ແລະ <b>ຈັບຄູ່ (pair)</b> ກັບ Xprinter / Pair the Xprinter in Android Bluetooth settings.</li>
+              <li>ເປີດ RawBT → ເລືອກ Xprinter ເປັນເຄື່ອງພິມ / Open RawBT → select the Xprinter as its printer.</li>
+              <li>ກັບມາທີ່ນີ້ ກົດ <b>ທົດສອບພິມ</b> / Come back here and tap <b>Test Print</b>.</li>
+              <li>ຖ້າໃຊ້ "Android Print": ໃນໜ້າຈໍພິມ ເລືອກ <b>RawBT</b> ເປັນປາຍທາງ / In the print dialog pick <b>RawBT</b> as the destination.</li>
+            </ol>
+            <div style={{ fontSize:11,color:"#6b7280",marginTop:10,lineHeight:1.6 }}>
+              ℹ️ ເບຣົາເຊີບໍ່ສາມາດຕໍ່ Bluetooth ໂດຍກົງ — RawBT ເປັນຕົວເຊື່ອມລະຫວ່າງແອັບ ກັບ Xprinter.<br/>
+              A browser can't reach Bluetooth directly; RawBT bridges the app to your Xprinter.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab==="notify"&&(
+        <div style={{ background:"#fff",borderRadius:12,padding:20,border:"1px solid #e5e7eb" }}>
+          <div style={{ fontSize:15,fontWeight:700,marginBottom:4 }}>🔔 ຕັ້ງຄ່າແຈ້ງເຕືອນ</div>
+          <div style={{ fontSize:13,color:"#6b7280",marginBottom:18 }}>Notification Settings — ຕັ້ງແຍກແຕ່ລະເຄື່ອງ / set per device</div>
+
           {/* Sale sound toggle */}
           {(() => {
             const on = stor.get("soundOn", true);
@@ -2434,7 +2462,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             const on = stor.get("pushOn", false);
             const supported = pushSupported();
             return (
-              <div style={{ marginBottom:20 }}>
+              <div style={{ marginBottom:0 }}>
                 <div style={{ fontSize:13,fontWeight:600,marginBottom:8 }}>📲 Push (ເຖິງແມ່ນປິດແອັບ) / Push when app is closed</div>
                 {!supported ? (
                   <div style={{ fontSize:12,color:"#b45309",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"10px 12px" }}>
@@ -2456,27 +2484,6 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
               </div>
             );
           })()}
-
-          {/* Test print */}
-          <button onClick={testPrint} style={{ width:"100%",padding:14,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:20 }}>
-            🧾 ທົດສອບພິມ / Test Print
-          </button>
-
-          {/* Setup guide */}
-          <div style={{ background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:14 }}>
-            <div style={{ fontSize:13,fontWeight:700,color:"#1d4ed8",marginBottom:8 }}>📲 ການຕັ້ງຄ່າຄັ້ງທຳອິດ / One-time setup on the tablet</div>
-            <ol style={{ margin:0,paddingLeft:18,fontSize:12,color:"#374151",lineHeight:1.9 }}>
-              <li>ຕິດຕັ້ງແອັບ <b>RawBT</b> ຈາກ Google Play / Install <b>RawBT</b> from Google Play.</li>
-              <li>ເປີດ Bluetooth ຂອງແທັບເລັດ ແລະ <b>ຈັບຄູ່ (pair)</b> ກັບ Xprinter / Pair the Xprinter in Android Bluetooth settings.</li>
-              <li>ເປີດ RawBT → ເລືອກ Xprinter ເປັນເຄື່ອງພິມ / Open RawBT → select the Xprinter as its printer.</li>
-              <li>ກັບມາທີ່ນີ້ ກົດ <b>ທົດສອບພິມ</b> / Come back here and tap <b>Test Print</b>.</li>
-              <li>ຖ້າໃຊ້ "Android Print": ໃນໜ້າຈໍພິມ ເລືອກ <b>RawBT</b> ເປັນປາຍທາງ / In the print dialog pick <b>RawBT</b> as the destination.</li>
-            </ol>
-            <div style={{ fontSize:11,color:"#6b7280",marginTop:10,lineHeight:1.6 }}>
-              ℹ️ ເບຣົາເຊີບໍ່ສາມາດຕໍ່ Bluetooth ໂດຍກົງ — RawBT ເປັນຕົວເຊື່ອມລະຫວ່າງແອັບ ກັບ Xprinter.<br/>
-              A browser can't reach Bluetooth directly; RawBT bridges the app to your Xprinter.
-            </div>
-          </div>
         </div>
       )}
     </div>
