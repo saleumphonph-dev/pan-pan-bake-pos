@@ -88,7 +88,7 @@ async function fetchChangedRows(table, since) {
   // (migration pending), fall back to the creation-date column so NEW rows still
   // sync incrementally and cheaply; voids/edits catch up once updated_at exists.
   let res = await runOn("updated_at");
-  if (res.error) res = await runOn(table === "shifts" ? "opened_at" : "date");
+  if (res.error) res = await runOn(table === "shifts" ? "opened_at" : table === "expenses" ? "created_at" : "date");
   if (res.error) return null;
   return { rows: res.rows, cursor: res.cursor };
 }
@@ -114,6 +114,50 @@ export async function fetchSalesSince(since) {
       voidReason: r.void_reason,
       parkedName: r.parked_name,
       deleted:    r.deleted ?? false,
+    })),
+  };
+}
+
+/** Upsert one expense. Returns true on success so a failed push can be retried.
+ *  Deletes are soft (deleted: true) — a hard delete would be undone by the union
+ *  merge on the next poll, since that merge never drops rows it doesn't see. */
+export async function syncExpense(exp) {
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase.from("expenses").upsert({
+      id:         exp.id,
+      name:       exp.name     ?? null,
+      name_lao:   exp.nameLao  ?? null,
+      type:       exp.type     ?? null,
+      category:   exp.category ?? null,
+      amount:     exp.amount   ?? 0,
+      month:      exp.month    ?? null,
+      deleted:    exp.deleted  ?? false,
+      updated_at: new Date().toISOString(),
+    });
+    return !error;
+  } catch (e) {
+    console.warn("[Supabase] syncExpense failed:", e.message);
+    return false;
+  }
+}
+
+/** Incremental expenses fetch. `since` is an ISO timestamp. Returns { rows, cursor } or null. */
+export async function fetchExpensesSince(since) {
+  const res = await fetchChangedRows("expenses", since);
+  if (res == null) return null;
+  return {
+    cursor: res.cursor,
+    rows: res.rows.map(r => ({
+      id:       r.id,
+      name:     r.name,
+      nameLao:  r.name_lao,
+      type:     r.type,
+      category: r.category,
+      amount:   Number(r.amount) || 0,
+      month:    r.month,
+      deleted:  r.deleted ?? false,
+      date:     r.created_at,
     })),
   };
 }
@@ -205,8 +249,9 @@ export async function wipeAllCloudData() {
   try {
     const s = await supabase.from("sales").delete().neq("id", "__never__");
     const h = await supabase.from("shifts").delete().neq("id", "__never__");
-    if (s.error || h.error) {
-      return { ok: false, error: (s.error || h.error).message };
+    const e = await supabase.from("expenses").delete().neq("id", "__never__");
+    if (s.error || h.error || e.error) {
+      return { ok: false, error: (s.error || h.error || e.error).message };
     }
     return { ok: true };
   } catch (e) {

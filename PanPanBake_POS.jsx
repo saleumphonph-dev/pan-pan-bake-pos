@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, syncExpense, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
 import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from "./src/lib/push.js";
 
 // ============================================================
@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.31-2";
+const BUILD_VERSION = "2026.07.31-3";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1711,8 +1711,7 @@ function DashboardView({ sales }) {
 // ============================================================
 // ACCOUNTING (with addons in revenue)
 // ============================================================
-function AccountingView({ sales }) {
-  const [expenses,setExpenses]=useState(()=>stor.get("expenses",[]));
+function AccountingView({ sales, expenses, onAddExpense, onDeleteExpense }) {
   const [form,setForm]=useState({name:"",nameLao:"",type:"variable",category:"ingredients",amount:"",month:new Date().toISOString().slice(0,7)});
   const [sel,setSel]=useState(new Date().toISOString().slice(0,7));
   const allCats=[...EXPENSE_CATS.fixed,...EXPENSE_CATS.variable];
@@ -1722,13 +1721,15 @@ function AccountingView({ sales }) {
     if(!valid)setForm(f=>({...f,category:EXPENSE_CATS[f.type][0].id}));
   },[form.type]);
 
-  const saveExp=()=>{ if(!form.name||!form.amount)return; const u=[...expenses,{id:genId(),...form,amount:Number(form.amount)}];setExpenses(u);stor.set("expenses",u);setForm({...form,name:"",nameLao:"",amount:""}); };
-  const delExp=(id)=>{const u=expenses.filter(e=>e.id!==id);setExpenses(u);stor.set("expenses",u);};
+  const saveExp=()=>{ if(!form.name||!form.amount)return; onAddExpense({id:genId(),...form,amount:Number(form.amount)}); setForm({...form,name:"",nameLao:"",amount:""}); };
+  const delExp=(id)=>{ if(!window.confirm("ລຶບລາຍຈ່າຍນີ້? / Delete this expense?"))return; onDeleteExpense(id); };
 
   const orderNet = (o) => o.items.reduce((s,i)=>s+itemPrice(i)*i.qty,0) - (o.discount||0);
   const monthSales=sales.filter(s=>!s.voided&&s.payment!=="foc"&&s.date.startsWith(sel));
   const revenue=monthSales.reduce((s,o)=>s+orderNet(o),0);
-  const monthExp=expenses.filter(e=>e.month===sel);
+  // Deleted expenses are kept as hidden tombstones so the delete propagates to
+  // other devices instead of the row reappearing on the next sync.
+  const monthExp=expenses.filter(e=>e.month===sel&&!e.deleted);
   const cogs=monthExp.filter(e=>COGS_IDS.includes(e.category)).reduce((s,e)=>s+e.amount,0);
   const grossProfit=revenue-cogs;
   const fixedTotal=monthExp.filter(e=>e.type==="fixed").reduce((s,e)=>s+e.amount,0);
@@ -2846,6 +2847,7 @@ export default function App() {
   const [addons,setAddons]=useState(()=>stor.get("addons",DEFAULT_ADDONS));
   const [sales,setSales]=useState(()=>stor.get("sales",[]));
   const [shifts,setShifts]=useState(()=>stor.get("shifts",[]));
+  const [expenses,setExpenses]=useState(()=>stor.get("expenses",[]));
   const [qrImage,setQrImage]=useState(()=>stor.get("qrImage",""));
   const [shopInfo,setShopInfo]=useState(()=>stor.get("shopInfo",DEFAULT_SHOP_INFO));
   const [parkedOrders,setParkedOrders]=useState(()=>stor.get("parked",[]));
@@ -3033,7 +3035,8 @@ export default function App() {
       const fullReconcile = (pollN === 1) || (pollN % 10 === 0);
       const salesSince  = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("salesCursor", EPOCH)) - OVERLAP).toISOString();
       const shiftsSince = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("shiftsCursor", EPOCH)) - OVERLAP).toISOString();
-      const [cs, cf, cmeta] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchSettingsMeta()]);
+      const expSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("expensesCursor", EPOCH)) - OVERLAP).toISOString();
+      const [cs, cf, ce, cmeta] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchExpensesSince(expSince), fetchSettingsMeta()]);
       if (cancelled) return;
       let purgedAt = stor.get("dataPurgedAt", null);
       // dataPurgedAt is a tiny value, but it still only needs fetching when it moves.
@@ -3072,6 +3075,14 @@ export default function App() {
         if (cf.cursor) stor.set("shiftsCursor", cf.cursor);
         if (fullReconcile) { const cloudIds = new Set(cf.rows.map(r => r.id)); merged.forEach(o => { if (!cloudIds.has(o.id)) syncShift(o); }); }
       }
+      if (ce) {
+        // Expenses have no purge marker of their own — the Reset wipes them via
+        // wipeAllCloudData, so an empty cloud plus a cleared local list is enough.
+        const merged = mergeChanges(stor.get("expenses", []), ce.rows, null, 0);
+        stor.set("expenses", merged); setExpenses(merged);
+        if (ce.cursor) stor.set("expensesCursor", ce.cursor);
+        if (fullReconcile) { const cloudIds = new Set(ce.rows.map(r => r.id)); merged.forEach(e => { if (!cloudIds.has(e.id)) syncExpense(e); }); }
+      }
       if (cmeta) {
         await syncSettings(cmeta);
         // Compare instants, not strings: our own pushes store a client ISO stamp
@@ -3081,6 +3092,7 @@ export default function App() {
       }
       retryPending("pendingSales", "sales", syncOrder);
       retryPending("pendingShifts", "shifts", syncShift);
+      retryPending("pendingExpenses", "expenses", syncExpense);
     };
     sync(); // immediate on login
     const id = setInterval(sync, 30000); // every 30s (was 10s — big egress cut)
@@ -3093,6 +3105,10 @@ export default function App() {
   const markPending=(listKey,id,ok)=>{ const p=stor.get(listKey,[]); if(ok){stor.set(listKey,p.filter(x=>x!==id));} else if(!p.includes(id)){stor.set(listKey,[...p,id]);} };
   const pushOrder=(o)=>{ syncOrder(o).then(ok=>markPending("pendingSales",o.id,ok)).catch(()=>markPending("pendingSales",o.id,false)); };
   const pushShift=(s)=>{ syncShift(s).then(ok=>markPending("pendingShifts",s.id,ok)).catch(()=>markPending("pendingShifts",s.id,false)); };
+  const pushExpense=(e)=>{ syncExpense(e).then(ok=>markPending("pendingExpenses",e.id,ok)).catch(()=>markPending("pendingExpenses",e.id,false)); };
+  const addExpense=(e)=>{ const u=[...expenses,e]; setExpenses(u); stor.set("expenses",u); pushExpense(e); };
+  // Soft delete: keep a tombstone so the removal reaches the other devices.
+  const deleteExpense=(id)=>{ const row=expenses.find(x=>x.id===id); if(!row)return; const t={...row,deleted:true}; const u=expenses.map(x=>x.id===id?t:x); setExpenses(u); stor.set("expenses",u); pushExpense(t); };
   const addSale=(o)=>{
     if(seenSaleIds.current)seenSaleIds.current.add(o.id);
     const u=[...sales,o];setSales(u);stor.set("sales",u);pushOrder(o);
@@ -3119,9 +3135,10 @@ export default function App() {
     stor.set("dataPurgedAt", purgeTs);
     // Cloud is empty. Clear all local POS data + sync cursors/pending so no in-flight
     // poll or stale state re-populates. Other devices drop their copies on next sync.
-    ["sales","shifts","parked","expenses","pendingSales","pendingShifts"].forEach(k=>stor.set(k,[]));
+    ["sales","shifts","parked","expenses","pendingSales","pendingShifts","pendingExpenses"].forEach(k=>stor.set(k,[]));
     stor.set("salesCursor","1970-01-01T00:00:00.000Z");
     stor.set("shiftsCursor","1970-01-01T00:00:00.000Z");
+    stor.set("expensesCursor","1970-01-01T00:00:00.000Z");
     alert("✅ ລ້າງຂໍ້ມູນທົດສອບສຳເລັດ (local + cloud).\nອຸປະກອນອື່ນຈະລ້າງເອງພາຍໃນ ~10 ວິນາທີ.\nກຳລັງໂຫຼດໃໝ່...");
     window.location.reload();
   };
@@ -3185,7 +3202,7 @@ export default function App() {
       {view==="dashboard"&&<DashboardView sales={sales} />}
       {view==="report"&&<ReportView sales={sales} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
-      {view==="accounting"&&<AccountingView sales={sales} />}
+      {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
       {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
     </div>
   );
@@ -3213,7 +3230,7 @@ export default function App() {
         {view==="dashboard"&&<DashboardView sales={sales} />}
       {view==="report"&&<ReportView sales={sales} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
-        {view==="accounting"&&<AccountingView sales={sales} />}
+        {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
         {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
       </div>
       <div style={{ position:"fixed",bottom:0,left:0,right:0,height:"calc(64px + env(safe-area-inset-bottom, 0px))",background:"#1a1a2e",display:"flex",alignItems:"flex-start",paddingBottom:"env(safe-area-inset-bottom, 0px)",zIndex:200,borderTop:"1px solid rgba(255,255,255,0.08)",boxSizing:"border-box" }}>
