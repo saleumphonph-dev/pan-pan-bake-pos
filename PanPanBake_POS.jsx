@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.31-1";
+const BUILD_VERSION = "2026.07.31-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -157,8 +157,8 @@ const stor = {
 // (≈1.3MB once base64-encoded); a menu full of those overflowed localStorage — the
 // write failed silently and the edit was lost — and made the synced menu blob so big
 // that uploads timed out and every device re-downloaded megabytes on each poll.
-// 400px wide is still sharp on a retina menu tile.
-function shrinkImage(dataUrl, maxW = 400, quality = 0.7) {
+// 560px covers the largest menu tile at 2x retina and still lands around 35kB.
+function shrinkImage(dataUrl, maxW = 560, quality = 0.75) {
   return new Promise((resolve) => {
     try {
       const img = new Image();
@@ -855,6 +855,16 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
   const setIdx = (i) => { const n = Math.max(0, Math.min(MENU_SIZES.length - 1, i)); setSizeIdx(n); stor.set("menuSizeIdx", n); };
   const cardMin = MENU_SIZES[sizeIdx];
   const imgH = Math.round(cardMin * 0.74); // photo height scales with the card
+  // Menu text size, independent of card size — the default was fixed at 12px, too
+  // small to read at a glance on the tablet. Persisted per device.
+  const TEXT_SCALES = [0.9, 1, 1.15, 1.3, 1.5];
+  const [txtIdx, setTxtIdx] = useState(() => {
+    const v = stor.get("menuTextIdx", 1);
+    return Math.max(0, Math.min(TEXT_SCALES.length - 1, v));
+  });
+  const setTxt = (i) => { const n = Math.max(0, Math.min(TEXT_SCALES.length - 1, i)); setTxtIdx(n); stor.set("menuTextIdx", n); };
+  const tScale = TEXT_SCALES[txtIdx];
+  const fs = (px) => Math.round(px * tScale);
 
   useEffect(() => { if (cat !== "__popular__" && !categories.find(c=>c.id===cat)) setCat(categories[0]?.id); }, [categories]);
 
@@ -1020,8 +1030,20 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
               color:cat===c.id?"#1a1a2e":"#e5e7eb",fontWeight:cat===c.id?700:500,fontSize:13,whiteSpace:"nowrap"
             }}>{c.label}{ADDON_CATEGORIES.includes(c.id) && " ✨"}</button>
           ))}
-          {/* Menu photo size: −/+ (zoom out = more per row, zoom in = bigger photos) */}
+          {/* Menu text size: A−/A＋ (independent of the card/photo size below) */}
           <div style={{ marginLeft:"auto",display:"flex",alignItems:"center",gap:4,paddingLeft:8 }}>
+            <span style={{ fontSize:11,color:"#9ca3af",whiteSpace:"nowrap" }}>ໂຕໜັງສື</span>
+            <button onClick={()=>setTxt(txtIdx-1)} disabled={txtIdx<=0} title="ໂຕໜັງສືນ້ອຍລົງ / smaller text" style={{
+              width:30,height:30,borderRadius:8,border:"none",cursor:txtIdx<=0?"default":"pointer",
+              background:txtIdx<=0?"rgba(255,255,255,0.06)":"rgba(255,255,255,0.15)",color:"#fff",fontSize:12,fontWeight:700,lineHeight:1,padding:0
+            }}>A−</button>
+            <button onClick={()=>setTxt(txtIdx+1)} disabled={txtIdx>=TEXT_SCALES.length-1} title="ໂຕໜັງສືໃຫຍ່ຂຶ້ນ / bigger text" style={{
+              width:30,height:30,borderRadius:8,border:"none",cursor:txtIdx>=TEXT_SCALES.length-1?"default":"pointer",
+              background:txtIdx>=TEXT_SCALES.length-1?"rgba(255,255,255,0.06)":"rgba(255,255,255,0.15)",color:"#fff",fontSize:15,fontWeight:700,lineHeight:1,padding:0
+            }}>A＋</button>
+          </div>
+          {/* Menu photo size: −/+ (zoom out = more per row, zoom in = bigger photos) */}
+          <div style={{ display:"flex",alignItems:"center",gap:4,paddingLeft:8 }}>
             <span style={{ fontSize:11,color:"#9ca3af",whiteSpace:"nowrap" }}>ຂະໜາດ</span>
             <button onClick={()=>setIdx(sizeIdx-1)} disabled={sizeIdx<=0} title="ນ້ອຍລົງ / smaller" style={{
               width:30,height:30,borderRadius:8,border:"none",cursor:sizeIdx<=0?"default":"pointer",
@@ -1048,9 +1070,9 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
                   ? <img src={item.image} alt={item.name} style={{ width:"100%",height:imgH,objectFit:"cover",display:"block",flexShrink:0 }} />
                   : <div style={{ width:"100%",height:imgH,display:"flex",alignItems:"center",justifyContent:"center",background:"#f9fafb",fontSize:Math.round(imgH*0.48),flexShrink:0 }}>{item.emoji}</div>}
                 <div style={{ padding:"8px 8px 10px",display:"flex",flexDirection:"column",gap:2 }}>
-                  <div style={{ fontSize:12,fontWeight:600,color:"#1a1a2e",lineHeight:1.3 }}>{item.name}</div>
-                  <div style={{ fontSize:11,color:"#6b7280" }}>{item.nameLao}</div>
-                  <div style={{ fontSize:13,fontWeight:700,color:"#7c3aed",marginTop:2 }}>{formatKip(item.price)}</div>
+                  <div style={{ fontSize:fs(12),fontWeight:600,color:"#1a1a2e",lineHeight:1.3 }}>{item.name}</div>
+                  <div style={{ fontSize:fs(11),color:"#6b7280" }}>{item.nameLao}</div>
+                  <div style={{ fontSize:fs(13),fontWeight:700,color:"#7c3aed",marginTop:2 }}>{formatKip(item.price)}</div>
                 </div>
               </button>
             );
@@ -2827,8 +2849,11 @@ export default function App() {
   const [qrImage,setQrImage]=useState(()=>stor.get("qrImage",""));
   const [shopInfo,setShopInfo]=useState(()=>stor.get("shopInfo",DEFAULT_SHOP_INFO));
   const [parkedOrders,setParkedOrders]=useState(()=>stor.get("parked",[]));
-  // True once the first settings poll has run, so we know `menu` reflects the cloud.
-  const [settingsReady,setSettingsReady]=useState(false);
+  // True only while our local menu is provably the SAME copy the cloud holds (same
+  // timestamp). The photo repair rewrites and re-uploads the menu, so it must never
+  // run on a device holding a stale copy — that would overwrite newer prices edited
+  // on the main tablet. Anything less strict than "timestamps match" risks that.
+  const [menuInSync,setMenuInSync]=useState(false);
   const [shiftModal,setShiftModal]=useState(null);
   // Cross-device "new sale" alert: track every sale id we've already seen so a sale
   // rung up on ANOTHER device pops an alert here (on-screen + sound + OS notification).
@@ -2918,11 +2943,11 @@ export default function App() {
   // localStorage — so menu/price edits failed to save and silently reverted — and
   // made every device re-download megabytes on each poll. Recompress anything
   // oversized and push the slim copy once.
-  //   Gated on settingsReady so we never push a stale local menu over a newer cloud
+  //   Gated on menuInSync so we never push a stale local menu over a newer cloud
   //   one: the push stamps a fresh timestamp, which would win and lose real edits.
   const compacted = useRef(false);
   useEffect(() => {
-    if (compacted.current || !role || !settingsReady) return;
+    if (compacted.current || !role || !menuInSync) return;
     const OVERSIZED = 90000; // chars of base64; a 400px JPEG from shrinkImage is ~20-30k
     const big = menu.filter(m => m.image && m.image.length > OVERSIZED);
     if (!big.length) return;
@@ -2932,7 +2957,7 @@ export default function App() {
       for (const m of big) shrunk.set(m.id, await shrinkImage(m.image));
       setMenuSync(menu.map(m => shrunk.has(m.id) ? { ...m, image: shrunk.get(m.id) } : m));
     })();
-  }, [menu, role, settingsReady]);
+  }, [menu, role, menuInSync]);
 
   // Cloud sync — INCREMENTAL to keep egress tiny (the old code re-downloaded the
   // whole sales table every 10s per device, which blew past Supabase's free 5GB
@@ -3047,7 +3072,13 @@ export default function App() {
         if (cf.cursor) stor.set("shiftsCursor", cf.cursor);
         if (fullReconcile) { const cloudIds = new Set(cf.rows.map(r => r.id)); merged.forEach(o => { if (!cloudIds.has(o.id)) syncShift(o); }); }
       }
-      if (cmeta) { await syncSettings(cmeta); if (!cancelled) setSettingsReady(true); }
+      if (cmeta) {
+        await syncSettings(cmeta);
+        // Compare instants, not strings: our own pushes store a client ISO stamp
+        // while the cloud echoes Postgres' formatting of the same moment.
+        const lts = stor.get("menuTs", null);
+        if (!cancelled) setMenuInSync(!!cmeta.menu && !!lts && new Date(lts).getTime() === new Date(cmeta.menu).getTime());
+      }
       retryPending("pendingSales", "sales", syncOrder);
       retryPending("pendingShifts", "shifts", syncShift);
     };
