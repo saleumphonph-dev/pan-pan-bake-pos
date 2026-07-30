@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchSettings, syncSetting } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
 import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from "./src/lib/push.js";
 
 // ============================================================
@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.07-2";
+const BUILD_VERSION = "2026.07.31-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -147,8 +147,39 @@ const sweetLabel = (id) => { const s = SWEETNESS_LEVELS.find(x => x.id === id); 
 
 const stor = {
   get: (k, def) => { try { const v = localStorage.getItem("ppb_" + k); return v ? JSON.parse(v) : def; } catch { return def; } },
-  set: (k, v) => { try { localStorage.setItem("ppb_" + k, JSON.stringify(v)); } catch {} },
+  // Returns false when the write failed (almost always a full localStorage quota).
+  // Callers that must not lose data (menu edits) check this and warn the user —
+  // silently swallowing the error is what used to make price edits vanish on reload.
+  set: (k, v) => { try { localStorage.setItem("ppb_" + k, JSON.stringify(v)); return true; } catch { return false; } },
 };
+
+// Shrink a picked image before we ever store it. Phone photos arrive as ~1MB+ files
+// (≈1.3MB once base64-encoded); a menu full of those overflowed localStorage — the
+// write failed silently and the edit was lost — and made the synced menu blob so big
+// that uploads timed out and every device re-downloaded megabytes on each poll.
+// 400px wide is still sharp on a retina menu tile.
+function shrinkImage(dataUrl, maxW = 400, quality = 0.7) {
+  return new Promise((resolve) => {
+    try {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, maxW / img.width);
+          const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
+          const c = document.createElement("canvas");
+          c.width = w; c.height = h;
+          const ctx = c.getContext("2d");
+          ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h); // JPEG has no alpha
+          ctx.drawImage(img, 0, 0, w, h);
+          const out = c.toDataURL("image/jpeg", quality);
+          resolve(out.length < dataUrl.length ? out : dataUrl); // keep whichever is smaller
+        } catch { resolve(dataUrl); }
+      };
+      img.onerror = () => resolve(dataUrl);
+      img.src = dataUrl;
+    } catch { resolve(dataUrl); }
+  });
+}
 
 // Stable per-device id (for push subscriptions — so a device isn't pushed its own sale).
 function getDeviceId() {
@@ -2029,38 +2060,51 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
 
   const handleImg=(e,target)=>{
     const f=e.target.files?.[0]; if(!f)return;
-    if(f.size>1024*1024){alert("ໃຫຍ່ເກີນ 1MB");return;}
+    if(f.size>8*1024*1024){alert("ຮູບໃຫຍ່ເກີນ 8MB / Image larger than 8MB");return;}
     const r=new FileReader();
-    r.onload=(ev)=>{ if(target==="form")setForm(x=>({...x,image:ev.target.result})); else if(target==="edit")setEditItem(x=>({...x,image:ev.target.result})); else if(target==="logo")setShopForm(x=>({...x,logo:ev.target.result})); else{setQrImage(ev.target.result);stor.set("qrImage",ev.target.result);} };
+    r.onload=async(ev)=>{
+      // Always compress: the raw photo is never stored (see shrinkImage). QR codes
+      // keep more detail so they stay scannable.
+      const src=ev.target.result;
+      const img=target==="qr"?await shrinkImage(src,640,0.85):await shrinkImage(src);
+      if(target==="form")setForm(x=>({...x,image:img}));
+      else if(target==="edit")setEditItem(x=>({...x,image:img}));
+      else if(target==="logo")setShopForm(x=>({...x,logo:img}));
+      else{setQrImage(img);stor.set("qrImage",img);}
+    };
     r.readAsDataURL(f);
   };
 
-  const saveNew=()=>{ if(!form.name||!form.price)return; const u=[...menu,{id:Date.now(),...form,price:Number(form.price)}]; setMenu(u);stor.set("menu",u);setShowAdd(false); setForm({name:"",nameLao:"",price:"",cat:categories[0]?.id,emoji:"🍞",popular:false,image:""}); };
-  const saveEdit=()=>{ const u=menu.map(m=>m.id===editItem.id?{...editItem,price:Number(editItem.price)}:m); setMenu(u);stor.set("menu",u);setEditItem(null); };
-  const delItem=(id)=>{ if(!window.confirm("ລຶບ?"))return; const u=menu.filter(m=>m.id!==id); setMenu(u);stor.set("menu",u); };
+  // setMenu is the synced setter — it stores locally AND uploads. It returns false if
+  // the local write failed (full storage), which used to be swallowed so the edit
+  // silently reverted on the next reload. Tell the user instead of losing their work.
+  const saveMenu=(u)=>{ if(setMenu(u)===false){ alert("⚠️ ບັນທຶກບໍ່ໄດ້ — ພື້ນທີ່ເຕັມ.\nລຶບຮູບເມນູບາງອັນອອກ ແລ້ວລອງໃໝ່.\n\nCouldn't save — device storage is full.\nRemove some menu photos and try again."); return false; } return true; };
+  const saveNew=()=>{ if(!form.name||!form.price)return; const u=[...menu,{id:Date.now(),...form,price:Number(form.price)}]; if(!saveMenu(u))return; setShowAdd(false); setForm({name:"",nameLao:"",price:"",cat:categories[0]?.id,emoji:"🍞",popular:false,image:""}); };
+  const saveEdit=()=>{ const u=menu.map(m=>m.id===editItem.id?{...editItem,price:Number(editItem.price)}:m); if(!saveMenu(u))return; setEditItem(null); };
+  const delItem=(id)=>{ if(!window.confirm("ລຶບ?"))return; const u=menu.filter(m=>m.id!==id); saveMenu(u); };
 
   const saveCat=()=>{
     const id=catForm.id||catForm.labelEn.toLowerCase().replace(/[^a-z0-9]/g,"_").slice(0,20);
     if(!catForm.label||!catForm.labelEn)return;
     if(!editCat&&categories.find(c=>c.id===id)){alert("ID ຊ້ຳ");return;}
     const u=editCat ? categories.map(c=>c.id===editCat.id?{id:editCat.id,label:catForm.label,labelEn:catForm.labelEn}:c) : [...categories,{id,label:catForm.label,labelEn:catForm.labelEn}];
-    setCategories(u);stor.set("categories",u);setShowAddCat(false);setEditCat(null);setCatForm({id:"",label:"",labelEn:""});
+    setCategories(u);setShowAddCat(false);setEditCat(null);setCatForm({id:"",label:"",labelEn:""});
   };
   const startEditCat=(c)=>{setEditCat(c);setCatForm({id:c.id,label:c.label,labelEn:c.labelEn});setShowAddCat(true);};
-  const delCat=(id)=>{ const cnt=menu.filter(m=>m.cat===id).length; if(cnt>0){alert(`ມີ ${cnt} ເມນູ`);return;} if(!window.confirm("ລຶບ?"))return; const u=categories.filter(c=>c.id!==id); setCategories(u);stor.set("categories",u); };
+  const delCat=(id)=>{ const cnt=menu.filter(m=>m.cat===id).length; if(cnt>0){alert(`ມີ ${cnt} ເມນູ`);return;} if(!window.confirm("ລຶບ?"))return; const u=categories.filter(c=>c.id!==id); setCategories(u); };
 
   const saveAddon=()=>{
     if(!addonForm.name||!addonForm.price)return;
     const id=editAddon?.id || addonForm.name.toLowerCase().replace(/[^a-z0-9]/g,"_").slice(0,20)+"_"+Date.now().toString(36);
     const newAddon={id,...addonForm,price:Number(addonForm.price)};
     const u=editAddon ? addons.map(a=>a.id===editAddon.id?newAddon:a) : [...addons,newAddon];
-    setAddons(u);stor.set("addons",u);setShowAddAddon(false);setEditAddon(null);
+    setAddons(u);setShowAddAddon(false);setEditAddon(null);
     setAddonForm({name:"",nameLao:"",price:"",group:"milk"});
   };
   const startEditAddon=(a)=>{setEditAddon(a);setAddonForm({name:a.name,nameLao:a.nameLao,price:a.price,group:a.group});setShowAddAddon(true);};
-  const delAddon=(id)=>{ if(!window.confirm("ລຶບ?"))return; const u=addons.filter(a=>a.id!==id); setAddons(u);stor.set("addons",u); };
+  const delAddon=(id)=>{ if(!window.confirm("ລຶບ?"))return; const u=addons.filter(a=>a.id!==id); setAddons(u); };
 
-  const saveShop=()=>{setShopInfo(shopForm);stor.set("shopInfo",shopForm);alert("ບັນທຶກສຳເລັດ ✓");};
+  const saveShop=()=>{setShopInfo(shopForm);alert("ບັນທຶກສຳເລັດ ✓");};
 
   const filtered=filterCat==="all"?menu:menu.filter(m=>m.cat===filterCat);
   const inpStyle={width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box"};
@@ -2783,6 +2827,8 @@ export default function App() {
   const [qrImage,setQrImage]=useState(()=>stor.get("qrImage",""));
   const [shopInfo,setShopInfo]=useState(()=>stor.get("shopInfo",DEFAULT_SHOP_INFO));
   const [parkedOrders,setParkedOrders]=useState(()=>stor.get("parked",[]));
+  // True once the first settings poll has run, so we know `menu` reflects the cloud.
+  const [settingsReady,setSettingsReady]=useState(false);
   const [shiftModal,setShiftModal]=useState(null);
   // Cross-device "new sale" alert: track every sale id we've already seen so a sale
   // rung up on ANOTHER device pops an alert here (on-screen + sound + OS notification).
@@ -2808,16 +2854,29 @@ export default function App() {
   // These were local-only before, so editing the menu on one device never
   // reached the others. Now each save is stamped with a timestamp and pushed to
   // the cloud `settings` table; the poll below pulls any newer cloud version.
+  // Mark a setting as "uploaded / not yet uploaded" so the poll can retry a push that
+  // failed (offline, or a slow oversized payload). Without this a failed upload was
+  // invisible: the local timestamp was already the newest, so nothing ever re-sent it
+  // and the other devices stayed on the old menu forever.
+  const markSettingPending = (key, pending) => {
+    const p = stor.get("pendingSettings", []);
+    if (pending) { if (!p.includes(key)) stor.set("pendingSettings", [...p, key]); }
+    else if (p.includes(key)) stor.set("pendingSettings", p.filter(k => k !== key));
+  };
+  // Returns false if the value couldn't even be stored locally (quota) — the caller
+  // warns instead of pretending the edit was saved.
   const pushSetting = (key, value) => {
     const ts = new Date().toISOString();
-    stor.set(key, value);
+    if (!stor.set(key, value)) return false;
     stor.set(key + "Ts", ts);
-    syncSetting(key, value, ts);
+    markSettingPending(key, true);
+    syncSetting(key, value, ts).then(ok => markSettingPending(key, !ok)).catch(() => {});
+    return true;
   };
-  const setMenuSync       = (v) => { setMenu(v);       pushSetting("menu", v); };
-  const setCategoriesSync = (v) => { setCategories(v); pushSetting("categories", v); };
-  const setAddonsSync     = (v) => { setAddons(v);     pushSetting("addons", v); };
-  const setShopInfoSync   = (v) => { setShopInfo(v);   pushSetting("shopInfo", v); };
+  const setMenuSync       = (v) => { setMenu(v);       return pushSetting("menu", v); };
+  const setCategoriesSync = (v) => { setCategories(v); return pushSetting("categories", v); };
+  const setAddonsSync     = (v) => { setAddons(v);     return pushSetting("addons", v); };
+  const setShopInfoSync   = (v) => { setShopInfo(v);   return pushSetting("shopInfo", v); };
   // Manual "Push to all devices" — stamps the current menu/categories/add-ons/
   // shop info as newest and uploads them, so every other device pulls this copy.
   const pushAllSettings = () => {
@@ -2854,6 +2913,27 @@ export default function App() {
   // (subscriptions can rotate/expire).
   useEffect(() => { if (stor.get("pushOn", false)) ensurePush(getDeviceId()); }, []);
 
+  // One-time repair for menus saved by older builds, which stored the raw camera
+  // photo (one was 1.3MB; the whole menu blob reached 7MB). That overflowed
+  // localStorage — so menu/price edits failed to save and silently reverted — and
+  // made every device re-download megabytes on each poll. Recompress anything
+  // oversized and push the slim copy once.
+  //   Gated on settingsReady so we never push a stale local menu over a newer cloud
+  //   one: the push stamps a fresh timestamp, which would win and lose real edits.
+  const compacted = useRef(false);
+  useEffect(() => {
+    if (compacted.current || !role || !settingsReady) return;
+    const OVERSIZED = 90000; // chars of base64; a 400px JPEG from shrinkImage is ~20-30k
+    const big = menu.filter(m => m.image && m.image.length > OVERSIZED);
+    if (!big.length) return;
+    compacted.current = true;
+    (async () => {
+      const shrunk = new Map();
+      for (const m of big) shrunk.set(m.id, await shrinkImage(m.image));
+      setMenuSync(menu.map(m => shrunk.has(m.id) ? { ...m, image: shrunk.get(m.id) } : m));
+    })();
+  }, [menu, role, settingsReady]);
+
   // Cloud sync — INCREMENTAL to keep egress tiny (the old code re-downloaded the
   // whole sales table every 10s per device, which blew past Supabase's free 5GB
   // egress quota and got the project blocked). Now each poll only downloads rows
@@ -2876,14 +2956,34 @@ export default function App() {
       if (purgeMs) arr = arr.filter(r => new Date(r[tsField]).getTime() >= purgeMs); // drop reset rows
       return arr;
     };
-    const applySetting = (key, setter, cloud) => {
-      const c = cloud[key];
-      if (!c) return;
-      const localTs = stor.get(key + "Ts", null);
-      if (!localTs || new Date(c.updatedAt) > new Date(localTs)) {
-        setter(c.value);
-        stor.set(key, c.value);
-        stor.set(key + "Ts", c.updatedAt);
+    const SETTING_KEYS = { menu: setMenu, categories: setCategories, addons: setAddons, shopInfo: setShopInfo };
+    // Two-step settings sync: read the tiny timestamp list first, then download only
+    // the keys that actually changed. (The menu blob holds the photos and can be
+    // megabytes — pulling it every 30s on every device was slow and burned egress.)
+    const syncSettings = async (meta) => {
+      const stale = Object.keys(SETTING_KEYS).filter(k => {
+        if (!meta[k]) return false;
+        const localTs = stor.get(k + "Ts", null);
+        return !localTs || new Date(meta[k]) > new Date(localTs);
+      });
+      if (stale.length) {
+        const vals = await fetchSettingValues(stale);
+        if (cancelled || !vals) return;
+        stale.forEach(k => {
+          const c = vals[k];
+          if (!c) return;
+          if (!stor.set(k, c.value)) return; // out of room — keep the old value rather than half-applying
+          stor.set(k + "Ts", c.updatedAt);
+          SETTING_KEYS[k](c.value);
+        });
+      }
+      // Re-send anything whose upload failed earlier (writes are egress-free).
+      const pend = stor.get("pendingSettings", []);
+      for (const k of pend) {
+        if (cancelled) return;
+        const v = stor.get(k, null), ts = stor.get(k + "Ts", null);
+        if (v == null || !ts) { markSettingPending(k, false); continue; }
+        if (await syncSetting(k, v, ts)) markSettingPending(k, false);
       }
     };
     // Retry rows that failed to upload (e.g. made while offline). Writes don't count
@@ -2908,10 +3008,15 @@ export default function App() {
       const fullReconcile = (pollN === 1) || (pollN % 10 === 0);
       const salesSince  = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("salesCursor", EPOCH)) - OVERLAP).toISOString();
       const shiftsSince = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("shiftsCursor", EPOCH)) - OVERLAP).toISOString();
-      const [cs, cf, cset] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchSettings()]);
+      const [cs, cf, cmeta] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchSettingsMeta()]);
       if (cancelled) return;
       let purgedAt = stor.get("dataPurgedAt", null);
-      if (cset && cset.dataPurgedAt) { purgedAt = cset.dataPurgedAt.value; stor.set("dataPurgedAt", purgedAt); }
+      // dataPurgedAt is a tiny value, but it still only needs fetching when it moves.
+      if (cmeta && cmeta.dataPurgedAt && cmeta.dataPurgedAt !== stor.get("dataPurgedAtTs", null)) {
+        const dp = await fetchSettingValues(["dataPurgedAt"]);
+        if (cancelled) return;
+        if (dp && dp.dataPurgedAt) { purgedAt = dp.dataPurgedAt.value; stor.set("dataPurgedAt", purgedAt); stor.set("dataPurgedAtTs", cmeta.dataPurgedAt); }
+      }
       const purgeMs = purgedAt ? new Date(purgedAt).getTime() : 0;
       if (cs) {
         // Alert for sales that just arrived from ANOTHER device. Skip the very first
@@ -2942,12 +3047,7 @@ export default function App() {
         if (cf.cursor) stor.set("shiftsCursor", cf.cursor);
         if (fullReconcile) { const cloudIds = new Set(cf.rows.map(r => r.id)); merged.forEach(o => { if (!cloudIds.has(o.id)) syncShift(o); }); }
       }
-      if (cset) {
-        applySetting("menu", setMenu, cset);
-        applySetting("categories", setCategories, cset);
-        applySetting("addons", setAddons, cset);
-        applySetting("shopInfo", setShopInfo, cset);
-      }
+      if (cmeta) { await syncSettings(cmeta); if (!cancelled) setSettingsReady(true); }
       retryPending("pendingSales", "sales", syncOrder);
       retryPending("pendingShifts", "shifts", syncShift);
     };

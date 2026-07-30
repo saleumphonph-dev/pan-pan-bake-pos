@@ -138,12 +138,29 @@ export async function fetchShiftsSince(since) {
   };
 }
 
-/** Fetch all settings rows (menu, categories, add-ons, shop info) keyed by name.
- *  Returns { key: { value, updatedAt } } or null on error. */
-export async function fetchSettings() {
+/** Fetch just the timestamps of every settings row — key + updated_at only, no
+ *  values. This is a few dozen bytes, versus megabytes for the full menu (photos
+ *  live inside the menu blob). The poll runs this every 30s on every device and
+ *  only downloads a value when its timestamp actually moved; re-fetching the whole
+ *  menu each poll was a major egress drain and made syncs slow/flaky.
+ *  Returns { key: updatedAt } or null on error. */
+export async function fetchSettingsMeta() {
   if (!supabase) return null;
   try {
-    const { data, error } = await supabase.from("settings").select("*");
+    const { data, error } = await supabase.from("settings").select("key,updated_at");
+    if (error) return null;
+    const out = {};
+    data.forEach(r => { out[r.key] = r.updated_at; });
+    return out;
+  } catch { return null; }
+}
+
+/** Fetch the full value for specific settings keys only.
+ *  Returns { key: { value, updatedAt } } or null on error. */
+export async function fetchSettingValues(keys) {
+  if (!supabase || !keys.length) return {};
+  try {
+    const { data, error } = await supabase.from("settings").select("*").in("key", keys);
     if (error) return null;
     const out = {};
     data.forEach(r => { out[r.key] = { value: r.value, updatedAt: r.updated_at }; });
@@ -152,17 +169,22 @@ export async function fetchSettings() {
 }
 
 /** Upsert one setting (menu/categories/addons/shopInfo) with a timestamp so the
- *  newest edit wins across devices. Fire-and-forget, never throws. */
+ *  newest edit wins across devices. Returns true on success so the caller can
+ *  retry a failed push — a lost upload used to leave every other device stuck on
+ *  the old menu with no way to notice or recover. Never throws. */
 export async function syncSetting(key, value, updatedAt) {
-  if (!supabase) return;
+  if (!supabase) return false;
   try {
-    await supabase.from("settings").upsert({
+    const { error } = await supabase.from("settings").upsert({
       key,
       value,
       updated_at: updatedAt || new Date().toISOString(),
     });
+    if (error) console.warn("[Supabase] syncSetting failed:", error.message);
+    return !error;
   } catch (e) {
     console.warn("[Supabase] syncSetting failed:", e.message);
+    return false;
   }
 }
 
