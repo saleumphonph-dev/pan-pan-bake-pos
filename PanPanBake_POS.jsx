@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, syncExpense, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, syncExpense, syncStaff, syncAttendance, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchStaffSince, fetchAttendanceSince, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
 import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from "./src/lib/push.js";
 
 // ============================================================
@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.07.31-3";
+const BUILD_VERSION = "2026.08.08-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -76,6 +76,58 @@ const EXPENSE_CATS = {
   ],
 };
 const COGS_IDS = ["ingredients", "packaging"];
+
+// ── Staff & attendance ────────────────────────────────────────────────
+// Attendance is stored as EXCEPTIONS ONLY: a day with no row means the person
+// worked. With 8+ staff that's a few taps a month instead of ~240 entries.
+// `pay` is the fraction of a day's wage earned; `deducts` drives the wage math.
+const ATT_STATUS = [
+  { id: "leave_paid", label: "🌴 ພັກຮ້ອນ",  en: "Paid leave", pay: 1,   color: "#0891b2" },
+  { id: "sick",       label: "🤒 ພັກປ່ວຍ",  en: "Sick leave", pay: 1,   color: "#7c3aed" },
+  { id: "half",       label: "🌗 ເຄິ່ງວັນ", en: "Half day",   pay: 0.5, color: "#d97706" },
+  { id: "absent",     label: "❌ ຂາດງານ",   en: "Absent",     pay: 0,   color: "#dc2626" },
+  { id: "late",       label: "⏰ ມາຊ້າ",    en: "Late",       pay: 1,   color: "#65a30d" },
+];
+const attInfo = (id) => ATT_STATUS.find(s => s.id === id) || null;
+const PAY_TYPES = [
+  { id: "monthly", label: "ເງິນເດືອນ / Monthly" },
+  { id: "daily",   label: "ລາຍວັນ / Daily" },
+  { id: "hourly",  label: "ລາຍຊົ່ວໂມງ / Hourly" },
+];
+const STAFF_CFG_DEFAULT = { workDays: 26 }; // paid days in a standard month
+
+/** Wage for one person in one month. Returns the breakdown the UI shows and the
+ *  final amount. Exceptions are the only attendance rows that exist, so a person
+ *  with none is simply paid in full. */
+function calcWage(person, entries, workDays) {
+  const wd = Math.max(1, Number(workDays) || STAFF_CFG_DEFAULT.workDays);
+  const rate = Number(person.rate) || 0;
+  // Days of pay LOST to exceptions (paid leave/sick/late lose nothing).
+  let lost = 0;
+  const counts = {};
+  entries.forEach(e => {
+    const st = attInfo(e.status);
+    if (!st) return;
+    counts[e.status] = (counts[e.status] || 0) + 1;
+    lost += (1 - st.pay);
+  });
+  if (person.payType === "daily") {
+    const paidDays = Math.max(0, wd - lost);
+    return { counts, lost, paidDays, gross: rate * wd, deduction: rate * lost, amount: Math.round(rate * paidDays) };
+  }
+  if (person.payType === "hourly") {
+    const dh = Number(person.dailyHours) || 8;
+    const paidDays = Math.max(0, wd - lost);
+    // An entry may carry an explicit hours override for that day.
+    const override = entries.reduce((s, e) => s + (e.hours != null ? Number(e.hours) : 0), 0);
+    const hours = paidDays * dh + override;
+    return { counts, lost, paidDays, hours, gross: rate * wd * dh, deduction: rate * lost * dh, amount: Math.round(rate * hours) };
+  }
+  // monthly: deduct one day's share (salary ÷ workDays) per unpaid day
+  const perDay = rate / wd;
+  const deduction = perDay * lost;
+  return { counts, lost, paidDays: Math.max(0, wd - lost), gross: rate, deduction, amount: Math.max(0, Math.round(rate - deduction)) };
+}
 
 const INITIAL_MENU = [
   { id: 1, cat: "bakery", name: "Croissant", nameLao: "ຄວາຊ໊ອງ", price: 15000, emoji: "🥐", popular: true },
@@ -1709,6 +1761,202 @@ function DashboardView({ sales }) {
 }
 
 // ============================================================
+// STAFF — attendance & wages (manager + owner)
+// ============================================================
+function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, onDeleteStaff, onSetAttendance, onSaveCfg, onPostWages }) {
+  const today = new Date().toISOString().slice(0,10);
+  const [tab,setTab]=useState("attend");
+  const [day,setDay]=useState(today);
+  const [month,setMonth]=useState(today.slice(0,7));
+  const [edit,setEdit]=useState(null);      // staff being added/edited
+  const blank={ name:"",nameLao:"",position:"",payType:"monthly",rate:"",dailyHours:8,active:true };
+
+  const people = staff.filter(s=>!s.deleted).sort((a,b)=>(b.active?1:0)-(a.active?1:0)||String(a.name).localeCompare(String(b.name)));
+  const activePeople = people.filter(s=>s.active);
+  const live = attendance.filter(a=>!a.deleted);
+  const entryFor = (sid,d) => live.find(a=>a.staffId===sid&&a.date===d) || null;
+  const workDays = Number(staffCfg.workDays)||STAFF_CFG_DEFAULT.workDays;
+
+  const inp={ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" };
+  const card={ background:"#fff",borderRadius:12,padding:18,border:"1px solid #e5e7eb",marginBottom:16 };
+
+  // ── wages for the selected month ──
+  const monthRows = activePeople.map(p=>{
+    const ent = live.filter(a=>a.staffId===p.id && a.date.startsWith(month));
+    return { p, ent, ...calcWage(p, ent, workDays) };
+  });
+  const wageTotal = monthRows.reduce((s,r)=>s+r.amount,0);
+  const postedId = `wages-${month}`;
+  const posted = expenses.find(e=>e.id===postedId && !e.deleted) || null;
+
+  const saveStaff=()=>{
+    if(!edit.name||!String(edit.rate).length){alert("ໃສ່ຊື່ ແລະ ອັດຕາຄ່າຈ້າງ / Enter a name and a pay rate");return;}
+    onSaveStaff({ ...edit, id:edit.id||genId(), rate:Number(edit.rate)||0, dailyHours:Number(edit.dailyHours)||8 });
+    setEdit(null);
+  };
+
+  return (
+    <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
+      <h1 style={{ margin:"0 0 4px",fontSize:22,fontWeight:700 }}>👥 ພະນັກງານ</h1>
+      <div style={{ fontSize:13,color:"#6b7280",marginBottom:16 }}>Staff attendance &amp; wages — {activePeople.length} ຄົນເຮັດວຽກ / active</div>
+
+      <div style={{ display:"flex",gap:4,marginBottom:16,background:"#fff",padding:4,borderRadius:10,width:"fit-content",flexWrap:"wrap" }}>
+        {[["attend","📋 ບັນທຶກ"],["people","👤 ລາຍຊື່"],["wages","💰 ຄ່າແຮງ"]].map(([v,l])=>(
+          <button key={v} onClick={()=>setTab(v)} style={{ padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",background:tab===v?"#1a1a2e":"transparent",color:tab===v?"#f4d03f":"#374151",fontWeight:tab===v?700:500,fontSize:13 }}>{l}</button>
+        ))}
+      </div>
+
+      {/* ── ATTENDANCE: pick a day, mark only the exceptions ── */}
+      {tab==="attend"&&(
+        <>
+          <div style={{ ...card,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap" }}>
+            <span style={{ fontSize:13,fontWeight:600 }}>📅 ວັນທີ / Date</span>
+            <input type="date" value={day} max={today} onChange={e=>setDay(e.target.value)} style={{ ...inp,width:"auto" }} />
+            <button onClick={()=>setDay(today)} style={{ padding:"8px 12px",borderRadius:8,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:12,fontWeight:600 }}>ມື້ນີ້ / Today</button>
+            <div style={{ fontSize:11,color:"#9ca3af",flexBasis:"100%",lineHeight:1.5 }}>ບໍ່ຕ້ອງໝາຍຄົນມາເຮັດວຽກ — ໝາຍສະເພາະຄົນຂາດ/ພັກ · Everyone counts as present. Only mark the exceptions.</div>
+          </div>
+
+          {activePeople.length===0 && <div style={{ ...card,textAlign:"center",color:"#9ca3af",fontSize:13 }}>ຍັງບໍ່ມີພະນັກງານ — ເພີ່ມທີ່ແທັບ 👤 ລາຍຊື່<br/>No staff yet — add them in the 👤 list tab.</div>}
+
+          {activePeople.map(p=>{
+            const e = entryFor(p.id, day);
+            const st = e ? attInfo(e.status) : null;
+            return (
+              <div key={p.id} style={{ ...card,marginBottom:10,padding:14,borderLeft:`4px solid ${st?st.color:"#16a34a"}` }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:10 }}>
+                  <div>
+                    <div style={{ fontSize:14,fontWeight:700 }}>{p.name}{p.nameLao?<span style={{ fontWeight:400,color:"#6b7280" }}> · {p.nameLao}</span>:null}</div>
+                    <div style={{ fontSize:11,color:"#9ca3af" }}>{p.position||"—"}</div>
+                  </div>
+                  <div style={{ fontSize:12,fontWeight:700,color:st?st.color:"#16a34a" }}>{st?`${st.label} / ${st.en}`:"✅ ມາເຮັດວຽກ / Present"}</div>
+                </div>
+                <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
+                  <button onClick={()=>onSetAttendance(p.id,day,null,"")} title="Present" style={{ padding:"9px 12px",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:700,border:"none",background:!st?"#16a34a":"#f3f4f6",color:!st?"#fff":"#374151" }}>✅</button>
+                  {ATT_STATUS.map(s=>(
+                    <button key={s.id} onClick={()=>onSetAttendance(p.id,day,s.id,e&&e.status===s.id?(e.reason||""):"")} title={s.en} style={{ padding:"9px 12px",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:700,border:"none",background:st&&st.id===s.id?s.color:"#f3f4f6",color:st&&st.id===s.id?"#fff":"#374151" }}>{s.label.split(" ")[0]}</button>
+                  ))}
+                </div>
+                {st && (
+                  <input value={e.reason||""} onChange={ev=>onSetAttendance(p.id,day,e.status,ev.target.value)} placeholder="ເຫດຜົນ / Reason (optional)" style={{ ...inp,marginTop:10,fontSize:13 }} />
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {/* ── STAFF LIST ── */}
+      {tab==="people"&&(
+        <>
+          <div style={{ display:"flex",justifyContent:"flex-end",marginBottom:12 }}>
+            <button onClick={()=>setEdit({...blank})} style={{ padding:"10px 18px",background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມພະນັກງານ</button>
+          </div>
+
+          {edit && (
+            <div style={{ ...card,border:"2px solid #f4d03f" }}>
+              <div style={{ fontSize:14,fontWeight:700,marginBottom:12 }}>{edit.id?"ແກ້ໄຂ / Edit":"ເພີ່ມໃໝ່ / New staff"}</div>
+              <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:10 }}>
+                <div><div style={{ fontSize:11,color:"#6b7280",marginBottom:4 }}>ຊື່ / Name *</div><input value={edit.name} onChange={e=>setEdit({...edit,name:e.target.value})} style={inp} /></div>
+                <div><div style={{ fontSize:11,color:"#6b7280",marginBottom:4 }}>ຊື່ລາວ / Lao name</div><input value={edit.nameLao} onChange={e=>setEdit({...edit,nameLao:e.target.value})} style={inp} /></div>
+                <div><div style={{ fontSize:11,color:"#6b7280",marginBottom:4 }}>ຕຳແໜ່ງ / Position</div><input value={edit.position} onChange={e=>setEdit({...edit,position:e.target.value})} style={inp} /></div>
+                <div><div style={{ fontSize:11,color:"#6b7280",marginBottom:4 }}>ປະເພດຄ່າຈ້າງ / Pay type</div>
+                  <select value={edit.payType} onChange={e=>setEdit({...edit,payType:e.target.value})} style={inp}>{PAY_TYPES.map(t=><option key={t.id} value={t.id}>{t.label}</option>)}</select></div>
+                <div><div style={{ fontSize:11,color:"#6b7280",marginBottom:4 }}>{edit.payType==="monthly"?"ເງິນເດືອນ / Salary":edit.payType==="daily"?"ຕໍ່ວັນ / Per day":"ຕໍ່ຊົ່ວໂມງ / Per hour"} (₭) *</div>
+                  <input type="number" value={edit.rate} onChange={e=>setEdit({...edit,rate:e.target.value})} style={inp} /></div>
+                {edit.payType==="hourly"&&(
+                  <div><div style={{ fontSize:11,color:"#6b7280",marginBottom:4 }}>ຊົ່ວໂມງ/ວັນ / Hours per day</div><input type="number" value={edit.dailyHours} onChange={e=>setEdit({...edit,dailyHours:e.target.value})} style={inp} /></div>
+                )}
+              </div>
+              <label style={{ display:"flex",alignItems:"center",gap:8,marginTop:12,fontSize:13,cursor:"pointer" }}>
+                <input type="checkbox" checked={edit.active} onChange={e=>setEdit({...edit,active:e.target.checked})} /> ຍັງເຮັດວຽກຢູ່ / Currently employed
+              </label>
+              <div style={{ display:"flex",gap:8,marginTop:14 }}>
+                <button onClick={saveStaff} style={{ flex:1,padding:12,background:"#16a34a",color:"#fff",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>ບັນທຶກ / Save</button>
+                <button onClick={()=>setEdit(null)} style={{ padding:"12px 18px",background:"#fff",border:"1px solid #e5e7eb",borderRadius:8,cursor:"pointer",fontWeight:600 }}>ຍົກເລີກ</button>
+              </div>
+            </div>
+          )}
+
+          {people.map(p=>(
+            <div key={p.id} style={{ ...card,marginBottom:10,padding:14,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",opacity:p.active?1:0.55 }}>
+              <div>
+                <div style={{ fontSize:14,fontWeight:700 }}>{p.name}{p.nameLao?<span style={{ fontWeight:400,color:"#6b7280" }}> · {p.nameLao}</span>:null}{!p.active&&<span style={{ fontSize:11,color:"#dc2626",marginLeft:8 }}>ອອກແລ້ວ / inactive</span>}</div>
+                <div style={{ fontSize:11,color:"#9ca3af",marginTop:2 }}>{p.position||"—"} · {(PAY_TYPES.find(t=>t.id===p.payType)||PAY_TYPES[0]).label} · {formatKip(p.rate)}{p.payType==="hourly"?"/ຊມ":p.payType==="daily"?"/ວັນ":"/ເດືອນ"}</div>
+              </div>
+              <div style={{ display:"flex",gap:6 }}>
+                <button onClick={()=>setEdit({...p,rate:String(p.rate)})} style={{ padding:"8px 12px",borderRadius:8,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:12 }}>✏️</button>
+                {role==="owner"&&<button onClick={()=>{ if(window.confirm(`ລຶບ ${p.name} ຖາວອນ? ປະຫວັດການມາເຮັດວຽກຈະຫາຍໄປນຳ.\n\nPermanently remove ${p.name}? Their attendance history goes too.\n\nTip: untick "Currently employed" instead to keep the records.`)) onDeleteStaff(p.id); }} style={{ padding:"8px 12px",borderRadius:8,border:"1px solid #fecaca",background:"#fef2f2",color:"#dc2626",cursor:"pointer",fontSize:12 }}>🗑️</button>}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
+      {/* ── WAGES ── */}
+      {tab==="wages"&&(
+        <>
+          <div style={{ ...card,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
+            <span style={{ fontSize:13,fontWeight:600 }}>🗓️ ເດືອນ / Month</span>
+            <input type="month" value={month} onChange={e=>setMonth(e.target.value)} style={{ ...inp,width:"auto" }} />
+            <span style={{ fontSize:13,fontWeight:600,marginLeft:8 }}>ວັນເຮັດວຽກ/ເດືອນ</span>
+            <input type="number" min="1" max="31" value={workDays} onChange={e=>onSaveCfg({...staffCfg,workDays:Number(e.target.value)||26})} style={{ ...inp,width:80 }} />
+            <div style={{ fontSize:11,color:"#9ca3af",flexBasis:"100%",lineHeight:1.5 }}>ຫັກເງິນຂາດງານ = ເງິນເດືອນ ÷ {workDays} ຕໍ່ມື້ · Unpaid days deduct salary ÷ {workDays}. Paid leave, sick leave and late lose nothing.</div>
+          </div>
+
+          <div style={{ ...card,padding:0,overflow:"hidden" }}>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:560 }}>
+                <thead><tr style={{ background:"#f9fafb" }}>
+                  {["ພະນັກງານ / Staff","ປະເພດ","ຂາດ/ພັກ","ຫັກ / Deduction","ຈ່າຍ / Pay"].map((h,i)=>(
+                    <th key={h} style={{ padding:"10px 12px",textAlign:i>2?"right":"left",fontWeight:700,borderBottom:"1px solid #e5e7eb",whiteSpace:"nowrap" }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {monthRows.map(r=>(
+                    <tr key={r.p.id} style={{ borderBottom:"1px solid #f3f4f6" }}>
+                      <td style={{ padding:"10px 12px" }}><div style={{ fontWeight:600 }}>{r.p.name}</div><div style={{ fontSize:11,color:"#9ca3af" }}>{r.p.position||"—"}</div></td>
+                      <td style={{ padding:"10px 12px",fontSize:11,color:"#6b7280" }}>{r.p.payType==="monthly"?"ເດືອນ":r.p.payType==="daily"?"ວັນ":"ຊົ່ວໂມງ"}<div style={{ color:"#9ca3af" }}>{formatKip(r.p.rate)}</div></td>
+                      <td style={{ padding:"10px 12px",fontSize:11 }}>
+                        {Object.keys(r.counts).length===0 ? <span style={{ color:"#16a34a" }}>ຄົບ / full</span> :
+                          Object.entries(r.counts).map(([k,n])=>{ const s=attInfo(k); return <span key={k} style={{ display:"inline-block",marginRight:6,color:s.color,whiteSpace:"nowrap" }}>{s.label.split(" ")[0]}{n}</span>; })}
+                      </td>
+                      <td style={{ padding:"10px 12px",textAlign:"right",color:r.deduction>0?"#dc2626":"#9ca3af",whiteSpace:"nowrap" }}>{r.deduction>0?"−"+formatKip(Math.round(r.deduction)):"—"}</td>
+                      <td style={{ padding:"10px 12px",textAlign:"right",fontWeight:700,whiteSpace:"nowrap" }}>{formatKip(r.amount)}</td>
+                    </tr>
+                  ))}
+                  {monthRows.length===0&&<tr><td colSpan={5} style={{ padding:24,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີພະນັກງານ / No active staff</td></tr>}
+                </tbody>
+                <tfoot><tr style={{ background:"#1a1a2e",color:"#f4d03f" }}>
+                  <td colSpan={4} style={{ padding:"12px",fontWeight:700 }}>ລວມຄ່າແຮງ / Total wages — {month}</td>
+                  <td style={{ padding:"12px",textAlign:"right",fontWeight:700,fontSize:15,whiteSpace:"nowrap" }}>{formatKip(wageTotal)}</td>
+                </tr></tfoot>
+              </table>
+            </div>
+          </div>
+
+          {role==="owner" ? (
+            <div style={card}>
+              <div style={{ fontSize:13,fontWeight:700,marginBottom:6 }}>📒 ສົ່ງໄປບັນຊີ / Post to accounts</div>
+              <div style={{ fontSize:11,color:"#6b7280",marginBottom:12,lineHeight:1.6 }}>
+                ສ້າງລາຍຈ່າຍ 1 ແຖວ ໃນໝວດ 👥 ເງິນເດືອນ ສຳລັບເດືອນ {month}. ກົດຊ້ຳຈະອັບເດດແຖວເກົ່າ ບໍ່ເພີ່ມໃໝ່.<br/>
+                Creates one expense row in 👥 ເງິນເດືອນ for {month}. Posting again updates that same row instead of adding a duplicate.
+              </div>
+              {posted && <div style={{ fontSize:12,color:"#166534",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"8px 10px",marginBottom:10 }}>✓ ສົ່ງແລ້ວ / Posted: {formatKip(posted.amount)}{posted.amount!==wageTotal?` — ຕົວເລກປ່ຽນເປັນ ${formatKip(wageTotal)}, ກົດອີກຄັ້ງເພື່ອອັບເດດ / total changed, post again to update`:""}</div>}
+              <button disabled={wageTotal<=0} onClick={()=>{ if(window.confirm(`ສົ່ງ ${formatKip(wageTotal)} ໄປບັນຊີເດືອນ ${month}?\n\nPost ${formatKip(wageTotal)} to ${month} expenses as staff wages?`)) onPostWages(month,wageTotal); }}
+                style={{ width:"100%",padding:14,background:wageTotal>0?"#1a1a2e":"#e5e7eb",color:wageTotal>0?"#f4d03f":"#9ca3af",border:"none",borderRadius:10,fontWeight:700,cursor:wageTotal>0?"pointer":"default",fontSize:14 }}>
+                {posted?"🔄 ອັບເດດບັນຊີ / Update accounts":"📒 ສົ່ງໄປບັນຊີ / Post to accounts"}
+              </button>
+            </div>
+          ) : (
+            <div style={{ ...card,fontSize:12,color:"#6b7280" }}>ສະເພາະເຈົ້າຂອງທີ່ສົ່ງເຂົ້າບັນຊີໄດ້ · Only the owner can post wages to the accounts.</div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // ACCOUNTING (with addons in revenue)
 // ============================================================
 function AccountingView({ sales, expenses, onAddExpense, onDeleteExpense }) {
@@ -2829,6 +3077,7 @@ const NAV=[
   {id:"dashboard",label:"Dashboard",icon:"📊",roles:["manager","owner"]},
   {id:"report",label:"ລາຍງານ",icon:"📈",roles:["manager","owner"]},
   {id:"history",label:"ປະຫວັດ",icon:"🧾",roles:["manager","owner"]},
+  {id:"staff",label:"ພະນັກງານ",icon:"👥",roles:["manager","owner"]},
   {id:"accounting",label:"ບັນຊີ",icon:"📒",roles:["owner"]},
   {id:"admin",label:"ຈັດການ",icon:"⚙️",roles:["manager","owner"]},
 ];
@@ -2848,6 +3097,9 @@ export default function App() {
   const [sales,setSales]=useState(()=>stor.get("sales",[]));
   const [shifts,setShifts]=useState(()=>stor.get("shifts",[]));
   const [expenses,setExpenses]=useState(()=>stor.get("expenses",[]));
+  const [staff,setStaff]=useState(()=>stor.get("staff",[]));
+  const [attendance,setAttendance]=useState(()=>stor.get("attendance",[]));
+  const [staffCfg,setStaffCfg]=useState(()=>stor.get("staffCfg",STAFF_CFG_DEFAULT));
   const [qrImage,setQrImage]=useState(()=>stor.get("qrImage",""));
   const [shopInfo,setShopInfo]=useState(()=>stor.get("shopInfo",DEFAULT_SHOP_INFO));
   const [parkedOrders,setParkedOrders]=useState(()=>stor.get("parked",[]));
@@ -2983,7 +3235,7 @@ export default function App() {
       if (purgeMs) arr = arr.filter(r => new Date(r[tsField]).getTime() >= purgeMs); // drop reset rows
       return arr;
     };
-    const SETTING_KEYS = { menu: setMenu, categories: setCategories, addons: setAddons, shopInfo: setShopInfo };
+    const SETTING_KEYS = { menu: setMenu, categories: setCategories, addons: setAddons, shopInfo: setShopInfo, staffCfg: setStaffCfg };
     // Two-step settings sync: read the tiny timestamp list first, then download only
     // the keys that actually changed. (The menu blob holds the photos and can be
     // megabytes — pulling it every 30s on every device was slow and burned egress.)
@@ -3036,7 +3288,9 @@ export default function App() {
       const salesSince  = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("salesCursor", EPOCH)) - OVERLAP).toISOString();
       const shiftsSince = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("shiftsCursor", EPOCH)) - OVERLAP).toISOString();
       const expSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("expensesCursor", EPOCH)) - OVERLAP).toISOString();
-      const [cs, cf, ce, cmeta] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchExpensesSince(expSince), fetchSettingsMeta()]);
+      const stfSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("staffCursor", EPOCH)) - OVERLAP).toISOString();
+      const attSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("attendanceCursor", EPOCH)) - OVERLAP).toISOString();
+      const [cs, cf, ce, cst, cat, cmeta] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchExpensesSince(expSince), fetchStaffSince(stfSince), fetchAttendanceSince(attSince), fetchSettingsMeta()]);
       if (cancelled) return;
       let purgedAt = stor.get("dataPurgedAt", null);
       // dataPurgedAt is a tiny value, but it still only needs fetching when it moves.
@@ -3083,6 +3337,18 @@ export default function App() {
         if (ce.cursor) stor.set("expensesCursor", ce.cursor);
         if (fullReconcile) { const cloudIds = new Set(ce.rows.map(r => r.id)); merged.forEach(e => { if (!cloudIds.has(e.id)) syncExpense(e); }); }
       }
+      if (cst) {
+        const merged = mergeChanges(stor.get("staff", []), cst.rows, null, 0);
+        stor.set("staff", merged); setStaff(merged);
+        if (cst.cursor) stor.set("staffCursor", cst.cursor);
+        if (fullReconcile) { const ids = new Set(cst.rows.map(r => r.id)); merged.forEach(s => { if (!ids.has(s.id)) syncStaff(s); }); }
+      }
+      if (cat) {
+        const merged = mergeChanges(stor.get("attendance", []), cat.rows, null, 0);
+        stor.set("attendance", merged); setAttendance(merged);
+        if (cat.cursor) stor.set("attendanceCursor", cat.cursor);
+        if (fullReconcile) { const ids = new Set(cat.rows.map(r => r.id)); merged.forEach(a => { if (!ids.has(a.id)) syncAttendance(a); }); }
+      }
       if (cmeta) {
         await syncSettings(cmeta);
         // Compare instants, not strings: our own pushes store a client ISO stamp
@@ -3093,6 +3359,8 @@ export default function App() {
       retryPending("pendingSales", "sales", syncOrder);
       retryPending("pendingShifts", "shifts", syncShift);
       retryPending("pendingExpenses", "expenses", syncExpense);
+      retryPending("pendingStaff", "staff", syncStaff);
+      retryPending("pendingAttendance", "attendance", syncAttendance);
     };
     sync(); // immediate on login
     const id = setInterval(sync, 30000); // every 30s (was 10s — big egress cut)
@@ -3109,6 +3377,31 @@ export default function App() {
   const addExpense=(e)=>{ const u=[...expenses,e]; setExpenses(u); stor.set("expenses",u); pushExpense(e); };
   // Soft delete: keep a tombstone so the removal reaches the other devices.
   const deleteExpense=(id)=>{ const row=expenses.find(x=>x.id===id); if(!row)return; const t={...row,deleted:true}; const u=expenses.map(x=>x.id===id?t:x); setExpenses(u); stor.set("expenses",u); pushExpense(t); };
+
+  // ── Staff & attendance ──
+  const pushStaff=(s)=>{ syncStaff(s).then(ok=>markPending("pendingStaff",s.id,ok)).catch(()=>markPending("pendingStaff",s.id,false)); };
+  const pushAtt=(a)=>{ syncAttendance(a).then(ok=>markPending("pendingAttendance",a.id,ok)).catch(()=>markPending("pendingAttendance",a.id,false)); };
+  const saveStaffMember=(s)=>{ const u=staff.some(x=>x.id===s.id)?staff.map(x=>x.id===s.id?s:x):[...staff,s]; setStaff(u); stor.set("staff",u); pushStaff(s); };
+  const deleteStaffMember=(id)=>{ const row=staff.find(x=>x.id===id); if(!row)return; const t={...row,deleted:true}; const u=staff.map(x=>x.id===id?t:x); setStaff(u); stor.set("staff",u); pushStaff(t); };
+  // status===null means "present" — the exception row is tombstoned rather than
+  // dropped, so clearing it on one device also clears it on the others.
+  const setAttendanceEntry=(staffId,date,status,reason)=>{
+    const id=`${staffId}_${date}`;
+    const prev=attendance.find(a=>a.id===id);
+    const row={ id, staffId, date, status:status||(prev?prev.status:"absent"), reason:reason||"", hours:prev?prev.hours:null, deleted:!status };
+    const u=prev?attendance.map(a=>a.id===id?row:a):[...attendance,row];
+    setAttendance(u); stor.set("attendance",u); pushAtt(row);
+  };
+  const saveStaffCfg=(c)=>{ setStaffCfg(c); pushSetting("staffCfg",c); };
+  // The ONLY place staff data touches the books: one expense row per month, with a
+  // fixed id so re-posting updates it instead of stacking duplicates.
+  const postWages=(month,amount)=>{
+    const id=`wages-${month}`;
+    const row={ id, name:"Staff wages (from 👥)", nameLao:"ຄ່າແຮງພະນັກງານ", type:"fixed", category:"salary", amount, month, deleted:false };
+    const u=expenses.some(e=>e.id===id)?expenses.map(e=>e.id===id?row:e):[...expenses,row];
+    setExpenses(u); stor.set("expenses",u); pushExpense(row);
+    alert(`✅ ສົ່ງໄປບັນຊີແລ້ວ: ${formatKip(amount)} (${month})\nເບິ່ງໄດ້ທີ່ 📒 ບັນຊີ → ໝວດ 👥 ເງິນເດືອນ\n\nPosted to accounts — see 📒 ບັນຊີ under 👥 ເງິນເດືອນ.`);
+  };
   const addSale=(o)=>{
     if(seenSaleIds.current)seenSaleIds.current.add(o.id);
     const u=[...sales,o];setSales(u);stor.set("sales",u);pushOrder(o);
@@ -3202,6 +3495,7 @@ export default function App() {
       {view==="dashboard"&&<DashboardView sales={sales} />}
       {view==="report"&&<ReportView sales={sales} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
+      {view==="staff"&&<StaffView staff={staff} attendance={attendance} staffCfg={staffCfg} expenses={expenses} role={role} onSaveStaff={saveStaffMember} onDeleteStaff={deleteStaffMember} onSetAttendance={setAttendanceEntry} onSaveCfg={saveStaffCfg} onPostWages={postWages} />}
       {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
       {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
     </div>
@@ -3230,7 +3524,8 @@ export default function App() {
         {view==="dashboard"&&<DashboardView sales={sales} />}
       {view==="report"&&<ReportView sales={sales} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
-        {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
+        {view==="staff"&&<StaffView staff={staff} attendance={attendance} staffCfg={staffCfg} expenses={expenses} role={role} onSaveStaff={saveStaffMember} onDeleteStaff={deleteStaffMember} onSetAttendance={setAttendanceEntry} onSaveCfg={saveStaffCfg} onPostWages={postWages} />}
+      {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
         {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
       </div>
       <div style={{ position:"fixed",bottom:0,left:0,right:0,height:"calc(64px + env(safe-area-inset-bottom, 0px))",background:"#1a1a2e",display:"flex",alignItems:"flex-start",paddingBottom:"env(safe-area-inset-bottom, 0px)",zIndex:200,borderTop:"1px solid rgba(255,255,255,0.08)",boxSizing:"border-box" }}>

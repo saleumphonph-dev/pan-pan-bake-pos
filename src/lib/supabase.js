@@ -88,7 +88,7 @@ async function fetchChangedRows(table, since) {
   // (migration pending), fall back to the creation-date column so NEW rows still
   // sync incrementally and cheaply; voids/edits catch up once updated_at exists.
   let res = await runOn("updated_at");
-  if (res.error) res = await runOn(table === "shifts" ? "opened_at" : table === "expenses" ? "created_at" : "date");
+  if (res.error) res = await runOn(table === "shifts" ? "opened_at" : (table === "expenses" || table === "staff" || table === "attendance") ? "created_at" : "date");
   if (res.error) return null;
   return { rows: res.rows, cursor: res.cursor };
 }
@@ -158,6 +158,89 @@ export async function fetchExpensesSince(since) {
       month:    r.month,
       deleted:  r.deleted ?? false,
       date:     r.created_at,
+    })),
+  };
+}
+
+/** Upsert one staff member. Returns true on success. Deletes are soft. */
+export async function syncStaff(s) {
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase.from("staff").upsert({
+      id:          s.id,
+      name:        s.name     ?? null,
+      name_lao:    s.nameLao  ?? null,
+      position:    s.position ?? null,
+      pay_type:    s.payType  ?? "monthly",
+      rate:        s.rate     ?? 0,
+      daily_hours: s.dailyHours ?? 8,
+      active:      s.active   ?? true,
+      deleted:     s.deleted  ?? false,
+      updated_at:  new Date().toISOString(),
+    });
+    return !error;
+  } catch (e) {
+    console.warn("[Supabase] syncStaff failed:", e.message);
+    return false;
+  }
+}
+
+/** Incremental staff fetch. Returns { rows, cursor } or null. */
+export async function fetchStaffSince(since) {
+  const res = await fetchChangedRows("staff", since);
+  if (res == null) return null;
+  return {
+    cursor: res.cursor,
+    rows: res.rows.map(r => ({
+      id:         r.id,
+      name:       r.name,
+      nameLao:    r.name_lao,
+      position:   r.position,
+      payType:    r.pay_type || "monthly",
+      rate:       Number(r.rate) || 0,
+      dailyHours: Number(r.daily_hours) || 8,
+      active:     r.active ?? true,
+      deleted:    r.deleted ?? false,
+    })),
+  };
+}
+
+/** Upsert one attendance entry. Only exceptions are stored — a day with no row
+ *  means the person was present. Returns true on success. */
+export async function syncAttendance(a) {
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase.from("attendance").upsert({
+      id:         a.id,
+      staff_id:   a.staffId,
+      date:       a.date,
+      status:     a.status,
+      reason:     a.reason ?? null,
+      hours:      a.hours ?? null,
+      deleted:    a.deleted ?? false,
+      updated_at: new Date().toISOString(),
+    });
+    return !error;
+  } catch (e) {
+    console.warn("[Supabase] syncAttendance failed:", e.message);
+    return false;
+  }
+}
+
+/** Incremental attendance fetch. Returns { rows, cursor } or null. */
+export async function fetchAttendanceSince(since) {
+  const res = await fetchChangedRows("attendance", since);
+  if (res == null) return null;
+  return {
+    cursor: res.cursor,
+    rows: res.rows.map(r => ({
+      id:      r.id,
+      staffId: r.staff_id,
+      date:    r.date,
+      status:  r.status,
+      reason:  r.reason,
+      hours:   r.hours == null ? null : Number(r.hours),
+      deleted: r.deleted ?? false,
     })),
   };
 }
