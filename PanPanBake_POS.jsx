@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.08-3";
+const BUILD_VERSION = "2026.08.08-4";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -91,7 +91,12 @@ const ATT_STATUS = [
   { id: "half",       label: "🌗 ເຄິ່ງວັນ", en: "Half day",   short: "½",   pay: 0.5, color: "#d97706" },
   { id: "absent",     label: "❌ ຂາດງານ",   en: "Absent",     short: "A",   pay: 0,   color: "#dc2626" },
   { id: "late",       label: "⏰ ມາຊ້າ",    en: "Late",       short: "L",   pay: 1,   color: "#65a30d" },
+  // Overtime: the person DID work (often a Sunday or holiday), so nothing is
+  // deducted. The extra pay is typed in by hand — hours are recorded for the
+  // record, otAmount is what actually gets added to the wage.
+  { id: "ot",         label: "⏱️ ໂອທີ",     en: "Overtime",   short: "OT",  pay: 1,   color: "#2563eb", ot: true },
 ];
+const DOW = ["S","M","T","W","T","F","S"];   // calendar header letters
 const attInfo = (id) => ATT_STATUS.find(s => s.id === id) || null;
 const PAY_TYPES = [
   { id: "monthly", label: "ເງິນເດືອນ / Monthly" },
@@ -107,17 +112,20 @@ function calcWage(person, entries, workDays) {
   const wd = Math.max(1, Number(workDays) || STAFF_CFG_DEFAULT.workDays);
   const rate = Number(person.rate) || 0;
   // Days of pay LOST to exceptions (paid leave/sick/late lose nothing).
-  let lost = 0;
+  let lost = 0, ot = 0, otHours = 0;
   const counts = {};
   entries.forEach(e => {
     const st = attInfo(e.status);
     if (!st) return;
     counts[e.status] = (counts[e.status] || 0) + 1;
     lost += (1 - st.pay);
+    // Overtime pay is entered by hand and simply added on top of the wage.
+    ot += Number(e.otAmount) || 0;
+    otHours += Number(e.otHours) || 0;
   });
   if (person.payType === "daily") {
     const paidDays = Math.max(0, wd - lost);
-    return { counts, lost, paidDays, gross: rate * wd, deduction: rate * lost, amount: Math.round(rate * paidDays) };
+    return { counts, lost, ot, otHours, paidDays, gross: rate * wd, deduction: rate * lost, amount: Math.round(rate * paidDays + ot) };
   }
   if (person.payType === "hourly") {
     const dh = Number(person.dailyHours) || 8;
@@ -125,12 +133,12 @@ function calcWage(person, entries, workDays) {
     // An entry may carry an explicit hours override for that day.
     const override = entries.reduce((s, e) => s + (e.hours != null ? Number(e.hours) : 0), 0);
     const hours = paidDays * dh + override;
-    return { counts, lost, paidDays, hours, gross: rate * wd * dh, deduction: rate * lost * dh, amount: Math.round(rate * hours) };
+    return { counts, lost, ot, otHours, paidDays, hours, gross: rate * wd * dh, deduction: rate * lost * dh, amount: Math.round(rate * hours + ot) };
   }
   // monthly: deduct one day's share (salary ÷ workDays) per unpaid day
   const perDay = rate / wd;
   const deduction = perDay * lost;
-  return { counts, lost, paidDays: Math.max(0, wd - lost), gross: rate, deduction, amount: Math.max(0, Math.round(rate - deduction)) };
+  return { counts, lost, ot, otHours, paidDays: Math.max(0, wd - lost), gross: rate, deduction, amount: Math.max(0, Math.round(rate - deduction)) + Math.round(ot) };
 }
 
 const INITIAL_MENU = [
@@ -1767,6 +1775,24 @@ function DashboardView({ sales }) {
 // ============================================================
 // STAFF — attendance & wages (manager + owner)
 // ============================================================
+/** Overtime inputs shown when a day is marked ⏱️ OT. Hours are recorded for the
+ *  record; the amount is typed in by hand and is what gets added to the wage —
+ *  so an hourly figure or a flat day rate both work, whichever the owner uses. */
+function OTFields({ e, onChange, inp }) {
+  return (
+    <div style={{ display:"flex",gap:8,marginTop:8,flexWrap:"wrap" }}>
+      <div style={{ flex:"1 1 120px" }}>
+        <div style={{ fontSize:11,color:"#6b7280",marginBottom:4 }}>ຊົ່ວໂມງ / Hours <span style={{ color:"#9ca3af" }}>(ບໍ່ບັງຄັບ)</span></div>
+        <input type="number" min="0" step="0.5" value={e.otHours??""} onChange={ev=>onChange({ otHours: ev.target.value===""?null:Number(ev.target.value) })} placeholder="ເຊັ່ນ 4" style={{ ...inp,fontSize:13 }} />
+      </div>
+      <div style={{ flex:"2 1 180px" }}>
+        <div style={{ fontSize:11,color:"#6b7280",marginBottom:4 }}>ຈຳນວນເງິນທີ່ຈະຈ່າຍ / Amount to pay (₭)</div>
+        <input type="number" min="0" value={e.otAmount??""} onChange={ev=>onChange({ otAmount: ev.target.value===""?null:Number(ev.target.value) })} placeholder="ໃສ່ຍອດລວມ / total for this day" style={{ ...inp,fontSize:13,fontWeight:700 }} />
+      </div>
+    </div>
+  );
+}
+
 function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, onDeleteStaff, onSetAttendance, onSaveCfg, onPostWages }) {
   const today = new Date().toISOString().slice(0,10);
   const isOwner = role==="owner";   // managers record attendance; pay data is owner-only
@@ -1817,6 +1843,7 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
         <td class="num">${worked}</td>
         ${cols.map(c=>`<td class="num">${r.counts[c]||"—"}</td>`).join("")}
         ${isOwner?`<td class="num">${r.deduction>0?"−"+formatKip(Math.round(r.deduction)):"—"}</td>
+        <td class="num">${r.ot>0?"+"+formatKip(Math.round(r.ot)):"—"}</td>
         <td class="num"><b>${formatKip(r.amount)}</b></td>`:""}</tr>`;
     }).join("");
     const detail=live.filter(a=>a.date.startsWith(month))
@@ -1837,9 +1864,9 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
       <table>
         <thead><tr><th>ພະນັກງານ / Staff</th><th>ຕຳແໜ່ງ</th>${isOwner?"<th>ປະເພດ</th>":""}<th class="num">ມາເຮັດວຽກ</th>
         ${ATT_STATUS.map(s=>`<th class="num">${s.short}</th>`).join("")}
-        ${isOwner?`<th class="num">ຫັກ / Deduct</th><th class="num">ຈ່າຍ / Pay</th>`:""}</tr></thead>
-        <tbody>${summary||`<tr><td colspan="${(isOwner?5:3)+ATT_STATUS.length}">—</td></tr>`}</tbody>
-        ${isOwner?`<tfoot><tr><th colspan="${4+ATT_STATUS.length}">ລວມ / Total</th><th class="num">${formatKip(Math.round(monthRows.reduce((s,r)=>s+r.deduction,0)))}</th><th class="num">${formatKip(wageTotal)}</th></tr></tfoot>`:""}
+        ${isOwner?`<th class="num">ຫັກ / Deduct</th><th class="num">ຄ່າ OT / OT pay</th><th class="num">ຈ່າຍ / Pay</th>`:""}</tr></thead>
+        <tbody>${summary||`<tr><td colspan="${(isOwner?6:3)+ATT_STATUS.length}">—</td></tr>`}</tbody>
+        ${isOwner?`<tfoot><tr><th colspan="${4+ATT_STATUS.length}">ລວມ / Total</th><th class="num">${formatKip(Math.round(monthRows.reduce((s,r)=>s+r.deduction,0)))}</th><th class="num">${formatKip(Math.round(monthRows.reduce((s,r)=>s+r.ot,0)))}</th><th class="num">${formatKip(wageTotal)}</th></tr></tfoot>`:""}
       </table>
       <h1 style="font-size:16px;margin:18px 0 6px">ລາຍລະອຽດ / Every recorded exception</h1>
       <div class="sub">ວັນທີ່ບໍ່ມີໃນລາຍການນີ້ = ມາເຮັດວຽກປົກກະຕິ · Any date not listed = worked as normal</div>
@@ -1893,7 +1920,10 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
                   ))}
                 </div>
                 {st && (
-                  <input value={e.reason||""} onChange={ev=>onSetAttendance(p.id,day,e.status,ev.target.value)} placeholder="ເຫດຜົນ / Reason (optional)" style={{ ...inp,marginTop:10,fontSize:13 }} />
+                  <>
+                    <input value={e.reason||""} onChange={ev=>onSetAttendance(p.id,day,e.status,ev.target.value)} placeholder={st.ot?"ເຫດຜົນ ເຊັ່ນ ວັນອາທິດ/ວັນພັກ · Reason e.g. Sunday / holiday":"ເຫດຜົນ / Reason (optional)"} style={{ ...inp,marginTop:10,fontSize:13 }} />
+                    {st.ot&&<OTFields e={e} onChange={x=>onSetAttendance(p.id,day,e.status,e.reason||"",x)} inp={inp} />}
+                  </>
                 )}
               </div>
             );
@@ -1926,7 +1956,13 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
                     <th style={{ position:"sticky",left:0,background:"#f9fafb",zIndex:2,padding:"8px 10px",textAlign:"left",borderBottom:"1px solid #e5e7eb",borderRight:"1px solid #e5e7eb",minWidth:130,fontSize:12 }}>ພະນັກງານ</th>
                     {monthDays.map(d=>{
                       const dow=new Date(`${month}-${String(d).padStart(2,"0")}T00:00:00`).getDay();
-                      return <th key={d} style={{ padding:"6px 0",width:26,minWidth:26,textAlign:"center",borderBottom:"1px solid #e5e7eb",fontWeight:600,color:dow===0?"#dc2626":"#6b7280",background:dow===0?"#fef2f2":"#f9fafb" }}>{d}</th>;
+                      const wknd=dow===0;
+                      return (
+                        <th key={d} style={{ padding:"4px 0",width:26,minWidth:26,textAlign:"center",borderBottom:"1px solid #e5e7eb",fontWeight:600,color:wknd?"#dc2626":"#6b7280",background:wknd?"#fef2f2":"#f9fafb" }}>
+                          <div style={{ fontSize:9,fontWeight:700,opacity:wknd?1:0.65,lineHeight:1.2 }}>{DOW[dow]}</div>
+                          <div style={{ lineHeight:1.2 }}>{d}</div>
+                        </th>
+                      );
                     })}
                   </tr>
                 </thead>
@@ -1977,7 +2013,8 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
                     <button key={s.id} onClick={()=>onSetAttendance(p.id,cell.date,s.id,e&&e.status===s.id?(e.reason||""):"")} style={{ padding:"9px 12px",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,border:"none",background:st&&st.id===s.id?s.color:"#f3f4f6",color:st&&st.id===s.id?"#fff":"#374151" }}>{s.label}</button>
                   ))}
                 </div>
-                {st&&<input value={e.reason||""} onChange={ev=>onSetAttendance(p.id,cell.date,e.status,ev.target.value)} placeholder="ເຫດຜົນ / Reason (optional)" style={{ ...inp,marginTop:10,fontSize:13 }} />}
+                {st&&<input value={e.reason||""} onChange={ev=>onSetAttendance(p.id,cell.date,e.status,ev.target.value)} placeholder={st.ot?"ເຫດຜົນ ເຊັ່ນ ວັນອາທິດ/ວັນພັກ · Reason e.g. Sunday / holiday":"ເຫດຜົນ / Reason (optional)"} style={{ ...inp,marginTop:10,fontSize:13 }} />}
+                {st&&st.ot&&<OTFields e={e} onChange={x=>onSetAttendance(p.id,cell.date,e.status,e.reason||"",x)} inp={inp} />}
               </div>
             );
           })()}
@@ -2047,7 +2084,8 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
             <div style={{ overflowX:"auto" }}>
               <table style={{ width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:560 }}>
                 <thead><tr style={{ background:"#f9fafb" }}>
-                  {["ພະນັກງານ / Staff","ປະເພດ","ຂາດ/ພັກ","ຫັກ / Deduction","ຈ່າຍ / Pay"].map((h,i)=>(
+                  
+  {["ພະນັກງານ / Staff","ປະເພດ","ຂາດ/ພັກ","ຫັກ / Deduction","OT","ຈ່າຍ / Pay"].map((h,i)=>(
                     <th key={h} style={{ padding:"10px 12px",textAlign:i>2?"right":"left",fontWeight:700,borderBottom:"1px solid #e5e7eb",whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr></thead>
@@ -2061,13 +2099,14 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
                           Object.entries(r.counts).map(([k,n])=>{ const s=attInfo(k); return <span key={k} style={{ display:"inline-block",marginRight:6,color:s.color,whiteSpace:"nowrap" }}>{s.label.split(" ")[0]}{n}</span>; })}
                       </td>
                       <td style={{ padding:"10px 12px",textAlign:"right",color:r.deduction>0?"#dc2626":"#9ca3af",whiteSpace:"nowrap" }}>{r.deduction>0?"−"+formatKip(Math.round(r.deduction)):"—"}</td>
+                      <td style={{ padding:"10px 12px",textAlign:"right",color:r.ot>0?"#2563eb":"#9ca3af",whiteSpace:"nowrap" }}>{r.ot>0?"+"+formatKip(Math.round(r.ot)):"—"}{r.ot>0&&r.otHours>0?<div style={{ fontSize:10,color:"#9ca3af" }}>{r.otHours}h</div>:null}</td>
                       <td style={{ padding:"10px 12px",textAlign:"right",fontWeight:700,whiteSpace:"nowrap" }}>{formatKip(r.amount)}</td>
                     </tr>
                   ))}
-                  {monthRows.length===0&&<tr><td colSpan={5} style={{ padding:24,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີພະນັກງານ / No active staff</td></tr>}
+                  {monthRows.length===0&&<tr><td colSpan={6} style={{ padding:24,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີພະນັກງານ / No active staff</td></tr>}
                 </tbody>
                 <tfoot><tr style={{ background:"#1a1a2e",color:"#f4d03f" }}>
-                  <td colSpan={4} style={{ padding:"12px",fontWeight:700 }}>ລວມຄ່າແຮງ / Total wages — {month}</td>
+                  <td colSpan={5} style={{ padding:"12px",fontWeight:700 }}>ລວມຄ່າແຮງ / Total wages — {month}</td>
                   <td style={{ padding:"12px",textAlign:"right",fontWeight:700,fontSize:15,whiteSpace:"nowrap" }}>{formatKip(wageTotal)}</td>
                 </tr></tfoot>
               </table>
@@ -3525,10 +3564,12 @@ export default function App() {
   const deleteStaffMember=(id)=>{ const row=staff.find(x=>x.id===id); if(!row)return; const t={...row,deleted:true}; const u=staff.map(x=>x.id===id?t:x); setStaff(u); stor.set("staff",u); pushStaff(t); };
   // status===null means "present" — the exception row is tombstoned rather than
   // dropped, so clearing it on one device also clears it on the others.
-  const setAttendanceEntry=(staffId,date,status,reason)=>{
+  const setAttendanceEntry=(staffId,date,status,reason,extra)=>{
     const id=`${staffId}_${date}`;
     const prev=attendance.find(a=>a.id===id);
-    const row={ id, staffId, date, status:status||(prev?prev.status:"absent"), reason:reason||"", hours:prev?prev.hours:null, deleted:!status };
+    const keep=(k)=>extra&&k in extra?extra[k]:(prev?prev[k]??null:null);
+    const row={ id, staffId, date, status:status||(prev?prev.status:"absent"), reason:reason||"", hours:prev?prev.hours:null,
+      otHours:keep("otHours"), otAmount:keep("otAmount"), deleted:!status };
     const u=prev?attendance.map(a=>a.id===id?row:a):[...attendance,row];
     setAttendance(u); stor.set("attendance",u); pushAtt(row);
   };

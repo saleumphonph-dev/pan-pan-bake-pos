@@ -217,6 +217,8 @@ export async function syncAttendance(a) {
       status:     a.status,
       reason:     a.reason ?? null,
       hours:      a.hours ?? null,
+      ot_hours:   a.otHours ?? null,
+      ot_amount:  a.otAmount ?? null,
       deleted:    a.deleted ?? false,
       updated_at: new Date().toISOString(),
     });
@@ -239,7 +241,9 @@ export async function fetchAttendanceSince(since) {
       date:    r.date,
       status:  r.status,
       reason:  r.reason,
-      hours:   r.hours == null ? null : Number(r.hours),
+      hours:    r.hours == null ? null : Number(r.hours),
+      otHours:  r.ot_hours == null ? null : Number(r.ot_hours),
+      otAmount: r.ot_amount == null ? null : Number(r.ot_amount),
       deleted: r.deleted ?? false,
     })),
   };
