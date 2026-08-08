@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.08-1";
+const BUILD_VERSION = "2026.08.08-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -81,12 +81,16 @@ const COGS_IDS = ["ingredients", "packaging"];
 // Attendance is stored as EXCEPTIONS ONLY: a day with no row means the person
 // worked. With 8+ staff that's a few taps a month instead of ~240 entries.
 // `pay` is the fraction of a day's wage earned; `deducts` drives the wage math.
+// `pay` is the fraction of a day's wage kept. A scheduled day off keeps full pay:
+// the month's paid days (workDays, default 26) already excludes rest days, so a
+// day off is recorded for the roster without ever touching the wage.
 const ATT_STATUS = [
-  { id: "leave_paid", label: "🌴 ພັກຮ້ອນ",  en: "Paid leave", pay: 1,   color: "#0891b2" },
-  { id: "sick",       label: "🤒 ພັກປ່ວຍ",  en: "Sick leave", pay: 1,   color: "#7c3aed" },
-  { id: "half",       label: "🌗 ເຄິ່ງວັນ", en: "Half day",   pay: 0.5, color: "#d97706" },
-  { id: "absent",     label: "❌ ຂາດງານ",   en: "Absent",     pay: 0,   color: "#dc2626" },
-  { id: "late",       label: "⏰ ມາຊ້າ",    en: "Late",       pay: 1,   color: "#65a30d" },
+  { id: "dayoff",     label: "🏖️ ມື້ພັກ",   en: "Day off",    short: "OFF", pay: 1,   color: "#0d9488" },
+  { id: "leave_paid", label: "🌴 ພັກຮ້ອນ",  en: "Paid leave", short: "AL",  pay: 1,   color: "#0891b2" },
+  { id: "sick",       label: "🤒 ພັກປ່ວຍ",  en: "Sick leave", short: "SL",  pay: 1,   color: "#7c3aed" },
+  { id: "half",       label: "🌗 ເຄິ່ງວັນ", en: "Half day",   short: "½",   pay: 0.5, color: "#d97706" },
+  { id: "absent",     label: "❌ ຂາດງານ",   en: "Absent",     short: "A",   pay: 0,   color: "#dc2626" },
+  { id: "late",       label: "⏰ ມາຊ້າ",    en: "Late",       short: "L",   pay: 1,   color: "#65a30d" },
 ];
 const attInfo = (id) => ATT_STATUS.find(s => s.id === id) || null;
 const PAY_TYPES = [
@@ -1769,7 +1773,10 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
   const [day,setDay]=useState(today);
   const [month,setMonth]=useState(today.slice(0,7));
   const [edit,setEdit]=useState(null);      // staff being added/edited
+  const [cell,setCell]=useState(null);      // { staffId, date } tapped in the calendar
   const blank={ name:"",nameLao:"",position:"",payType:"monthly",rate:"",dailyHours:8,active:true };
+  const [yy,mm]=month.split("-").map(Number);
+  const monthDays=Array.from({length:new Date(yy,mm,0).getDate()},(_,i)=>i+1);
 
   const people = staff.filter(s=>!s.deleted).sort((a,b)=>(b.active?1:0)-(a.active?1:0)||String(a.name).localeCompare(String(b.name)));
   const activePeople = people.filter(s=>s.active);
@@ -1795,13 +1802,60 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
     setEdit(null);
   };
 
+  // Full month record for checking: per-person totals, then every single exception
+  // with its date and reason, then the wage total.
+  const printAttendance=()=>{
+    const esc=(s)=>String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+    const cols=ATT_STATUS.map(s=>s.id);
+    const summary=monthRows.map(r=>{
+      const worked=monthDays.length-Object.values(r.counts).reduce((a,b)=>a+b,0);
+      return `<tr><td>${esc(r.p.name)}${r.p.nameLao?` <span style="color:#666">· ${esc(r.p.nameLao)}</span>`:""}</td>
+        <td>${esc(r.p.position||"—")}</td>
+        <td>${r.p.payType==="monthly"?"ເດືອນ":r.p.payType==="daily"?"ວັນ":"ຊົ່ວໂມງ"}</td>
+        <td class="num">${worked}</td>
+        ${cols.map(c=>`<td class="num">${r.counts[c]||"—"}</td>`).join("")}
+        <td class="num">${r.deduction>0?"−"+formatKip(Math.round(r.deduction)):"—"}</td>
+        <td class="num"><b>${formatKip(r.amount)}</b></td></tr>`;
+    }).join("");
+    const detail=live.filter(a=>a.date.startsWith(month))
+      .sort((a,b)=>a.date.localeCompare(b.date)||String(a.staffId).localeCompare(String(b.staffId)))
+      .map(a=>{
+        const p=people.find(x=>x.id===a.staffId), s=attInfo(a.status);
+        return `<tr><td>${esc(a.date)}</td><td>${esc(p?p.name:a.staffId)}</td><td>${esc(s?`${s.label} / ${s.en}`:a.status)}</td><td>${esc(a.reason||"—")}</td></tr>`;
+      }).join("");
+    printReport(`
+      <h1>👥 ບັນທຶກພະນັກງານ / Staff attendance record</h1>
+      <div class="sub">${esc(month)} · ພິມ ${new Date().toLocaleString("en-GB")} · ວັນເຮັດວຽກ/ເດືອນ ${workDays}</div>
+      <div class="cards">
+        <div class="card"><div class="k">ພະນັກງານ / Staff</div><div class="v">${monthRows.length}</div></div>
+        <div class="card"><div class="k">ຂາດງານ / Absent days</div><div class="v">${monthRows.reduce((s,r)=>s+(r.counts.absent||0),0)}</div></div>
+        <div class="card"><div class="k">ມື້ພັກ / Days off</div><div class="v">${monthRows.reduce((s,r)=>s+(r.counts.dayoff||0),0)}</div></div>
+        <div class="card"><div class="k">ລວມຄ່າແຮງ / Total wages</div><div class="v">${formatKip(wageTotal)}</div></div>
+      </div>
+      <table>
+        <thead><tr><th>ພະນັກງານ / Staff</th><th>ຕຳແໜ່ງ</th><th>ປະເພດ</th><th class="num">ມາເຮັດວຽກ</th>
+        ${ATT_STATUS.map(s=>`<th class="num">${s.short}</th>`).join("")}
+        <th class="num">ຫັກ / Deduct</th><th class="num">ຈ່າຍ / Pay</th></tr></thead>
+        <tbody>${summary||`<tr><td colspan="${5+ATT_STATUS.length}">—</td></tr>`}</tbody>
+        <tfoot><tr><th colspan="${4+ATT_STATUS.length}">ລວມ / Total</th><th class="num">${formatKip(Math.round(monthRows.reduce((s,r)=>s+r.deduction,0)))}</th><th class="num">${formatKip(wageTotal)}</th></tr></tfoot>
+      </table>
+      <h1 style="font-size:16px;margin:18px 0 6px">ລາຍລະອຽດ / Every recorded exception</h1>
+      <div class="sub">ວັນທີ່ບໍ່ມີໃນລາຍການນີ້ = ມາເຮັດວຽກປົກກະຕິ · Any date not listed = worked as normal</div>
+      <table>
+        <thead><tr><th>ວັນທີ / Date</th><th>ພະນັກງານ / Staff</th><th>ສະຖານະ / Status</th><th>ເຫດຜົນ / Reason</th></tr></thead>
+        <tbody>${detail||`<tr><td colspan="4">ບໍ່ມີ — ທຸກຄົນມາເຮັດວຽກຄົບ / none — full attendance</td></tr>`}</tbody>
+      </table>
+      ${ATT_STATUS.map(s=>`<span style="margin-right:14px;font-size:11px;color:#555"><b>${s.short}</b> = ${s.label} / ${s.en}</span>`).join("")}
+    `);
+  };
+
   return (
     <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
       <h1 style={{ margin:"0 0 4px",fontSize:22,fontWeight:700 }}>👥 ພະນັກງານ</h1>
       <div style={{ fontSize:13,color:"#6b7280",marginBottom:16 }}>Staff attendance &amp; wages — {activePeople.length} ຄົນເຮັດວຽກ / active</div>
 
       <div style={{ display:"flex",gap:4,marginBottom:16,background:"#fff",padding:4,borderRadius:10,width:"fit-content",flexWrap:"wrap" }}>
-        {[["attend","📋 ບັນທຶກ"],["people","👤 ລາຍຊື່"],["wages","💰 ຄ່າແຮງ"]].map(([v,l])=>(
+        {[["attend","📋 ບັນທຶກ"],["cal","📅 ປະຕິທິນ"],["people","👤 ລາຍຊື່"],["wages","💰 ຄ່າແຮງ"]].map(([v,l])=>(
           <button key={v} onClick={()=>setTab(v)} style={{ padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",background:tab===v?"#1a1a2e":"transparent",color:tab===v?"#f4d03f":"#374151",fontWeight:tab===v?700:500,fontSize:13 }}>{l}</button>
         ))}
       </div>
@@ -1842,6 +1896,89 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
               </div>
             );
           })}
+        </>
+      )}
+
+      {/* ── CALENDAR: whole month at a glance; tap any cell to record or fix it ── */}
+      {tab==="cal"&&(
+        <>
+          <div style={{ ...card,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
+            <span style={{ fontSize:13,fontWeight:600 }}>🗓️ ເດືອນ / Month</span>
+            <input type="month" value={month} onChange={e=>{setMonth(e.target.value);setCell(null);}} style={{ ...inp,width:"auto" }} />
+            <button onClick={printAttendance} style={{ padding:"9px 14px",borderRadius:8,border:"none",background:"#1a1a2e",color:"#f4d03f",cursor:"pointer",fontSize:13,fontWeight:700 }}>🖨️ ພິມລາຍງານ / Print record</button>
+            <div style={{ display:"flex",gap:10,flexWrap:"wrap",flexBasis:"100%",marginTop:4 }}>
+              <span style={{ fontSize:11,color:"#6b7280",display:"flex",alignItems:"center",gap:4 }}><i style={{ width:14,height:14,borderRadius:3,background:"#dcfce7",border:"1px solid #86efac",display:"inline-block" }} /> ມາເຮັດວຽກ / Present</span>
+              {ATT_STATUS.map(s=>(
+                <span key={s.id} style={{ fontSize:11,color:"#6b7280",display:"flex",alignItems:"center",gap:4 }}>
+                  <i style={{ width:14,height:14,borderRadius:3,background:s.color,color:"#fff",fontSize:8,fontWeight:700,display:"inline-flex",alignItems:"center",justifyContent:"center" }}>{s.short}</i>{s.label}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ ...card,padding:0,overflow:"hidden" }}>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ borderCollapse:"collapse",fontSize:11 }}>
+                <thead>
+                  <tr>
+                    <th style={{ position:"sticky",left:0,background:"#f9fafb",zIndex:2,padding:"8px 10px",textAlign:"left",borderBottom:"1px solid #e5e7eb",borderRight:"1px solid #e5e7eb",minWidth:130,fontSize:12 }}>ພະນັກງານ</th>
+                    {monthDays.map(d=>{
+                      const dow=new Date(`${month}-${String(d).padStart(2,"0")}T00:00:00`).getDay();
+                      return <th key={d} style={{ padding:"6px 0",width:26,minWidth:26,textAlign:"center",borderBottom:"1px solid #e5e7eb",fontWeight:600,color:dow===0?"#dc2626":"#6b7280",background:dow===0?"#fef2f2":"#f9fafb" }}>{d}</th>;
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {activePeople.map(p=>(
+                    <tr key={p.id}>
+                      <td style={{ position:"sticky",left:0,background:"#fff",zIndex:1,padding:"6px 10px",borderBottom:"1px solid #f3f4f6",borderRight:"1px solid #e5e7eb",whiteSpace:"nowrap",fontSize:12 }}>
+                        <div style={{ fontWeight:600 }}>{p.name}</div>
+                        <div style={{ fontSize:10,color:"#9ca3af" }}>{p.position||"—"}</div>
+                      </td>
+                      {monthDays.map(d=>{
+                        const date=`${month}-${String(d).padStart(2,"0")}`;
+                        const e=entryFor(p.id,date), st=e?attInfo(e.status):null;
+                        const isSel=cell&&cell.staffId===p.id&&cell.date===date;
+                        const future=date>today;
+                        return (
+                          <td key={d} style={{ padding:1,borderBottom:"1px solid #f3f4f6",textAlign:"center" }}>
+                            <button onClick={()=>setCell(isSel?null:{staffId:p.id,date})} title={`${p.name} · ${date}${st?` · ${st.en}`:""}${e&&e.reason?` · ${e.reason}`:""}`}
+                              style={{ width:24,height:24,borderRadius:4,cursor:"pointer",fontSize:8,fontWeight:700,lineHeight:1,padding:0,
+                                border:isSel?"2px solid #1a1a2e":"1px solid transparent",
+                                background:st?st.color:(future?"#f9fafb":"#dcfce7"), color:st?"#fff":"#86efac" }}>
+                              {st?st.short:""}
+                            </button>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                  {activePeople.length===0&&<tr><td colSpan={monthDays.length+1} style={{ padding:24,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີພະນັກງານ / No active staff</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Inline editor for the tapped cell */}
+          {cell&&(()=>{
+            const p=activePeople.find(x=>x.id===cell.staffId); if(!p) return null;
+            const e=entryFor(cell.staffId,cell.date), st=e?attInfo(e.status):null;
+            return (
+              <div style={{ ...card,border:"2px solid #1a1a2e" }}>
+                <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:10 }}>
+                  <div style={{ fontSize:14,fontWeight:700 }}>{p.name} · {cell.date}</div>
+                  <button onClick={()=>setCell(null)} style={{ padding:"4px 10px",borderRadius:6,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:12 }}>✕ ປິດ</button>
+                </div>
+                <div style={{ display:"flex",gap:6,flexWrap:"wrap" }}>
+                  <button onClick={()=>onSetAttendance(p.id,cell.date,null,"")} style={{ padding:"9px 12px",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,border:"none",background:!st?"#16a34a":"#f3f4f6",color:!st?"#fff":"#374151" }}>✅ ມາເຮັດວຽກ</button>
+                  {ATT_STATUS.map(s=>(
+                    <button key={s.id} onClick={()=>onSetAttendance(p.id,cell.date,s.id,e&&e.status===s.id?(e.reason||""):"")} style={{ padding:"9px 12px",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,border:"none",background:st&&st.id===s.id?s.color:"#f3f4f6",color:st&&st.id===s.id?"#fff":"#374151" }}>{s.label}</button>
+                  ))}
+                </div>
+                {st&&<input value={e.reason||""} onChange={ev=>onSetAttendance(p.id,cell.date,e.status,ev.target.value)} placeholder="ເຫດຜົນ / Reason (optional)" style={{ ...inp,marginTop:10,fontSize:13 }} />}
+              </div>
+            );
+          })()}
         </>
       )}
 
@@ -1900,6 +2037,7 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
             <input type="month" value={month} onChange={e=>setMonth(e.target.value)} style={{ ...inp,width:"auto" }} />
             <span style={{ fontSize:13,fontWeight:600,marginLeft:8 }}>ວັນເຮັດວຽກ/ເດືອນ</span>
             <input type="number" min="1" max="31" value={workDays} onChange={e=>onSaveCfg({...staffCfg,workDays:Number(e.target.value)||26})} style={{ ...inp,width:80 }} />
+            <button onClick={printAttendance} style={{ padding:"9px 14px",borderRadius:8,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:12,fontWeight:700 }}>🖨️ ພິມລາຍງານ / Print</button>
             <div style={{ fontSize:11,color:"#9ca3af",flexBasis:"100%",lineHeight:1.5 }}>ຫັກເງິນຂາດງານ = ເງິນເດືອນ ÷ {workDays} ຕໍ່ມື້ · Unpaid days deduct salary ÷ {workDays}. Paid leave, sick leave and late lose nothing.</div>
           </div>
 
