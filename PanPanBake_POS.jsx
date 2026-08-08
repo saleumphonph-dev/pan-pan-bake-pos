@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.08-2";
+const BUILD_VERSION = "2026.08.08-3";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1769,6 +1769,7 @@ function DashboardView({ sales }) {
 // ============================================================
 function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, onDeleteStaff, onSetAttendance, onSaveCfg, onPostWages }) {
   const today = new Date().toISOString().slice(0,10);
+  const isOwner = role==="owner";   // managers record attendance; pay data is owner-only
   const [tab,setTab]=useState("attend");
   const [day,setDay]=useState(today);
   const [month,setMonth]=useState(today.slice(0,7));
@@ -1802,8 +1803,9 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
     setEdit(null);
   };
 
-  // Full month record for checking: per-person totals, then every single exception
-  // with its date and reason, then the wage total.
+  // Full month record for checking. The manager's copy is attendance only — pay
+  // type, deductions and wages are stripped out, since managers never see the
+  // 👤 ລາຍຊື່ / 💰 ຄ່າແຮງ tabs either.
   const printAttendance=()=>{
     const esc=(s)=>String(s??"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
     const cols=ATT_STATUS.map(s=>s.id);
@@ -1811,11 +1813,11 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
       const worked=monthDays.length-Object.values(r.counts).reduce((a,b)=>a+b,0);
       return `<tr><td>${esc(r.p.name)}${r.p.nameLao?` <span style="color:#666">· ${esc(r.p.nameLao)}</span>`:""}</td>
         <td>${esc(r.p.position||"—")}</td>
-        <td>${r.p.payType==="monthly"?"ເດືອນ":r.p.payType==="daily"?"ວັນ":"ຊົ່ວໂມງ"}</td>
+        ${isOwner?`<td>${r.p.payType==="monthly"?"ເດືອນ":r.p.payType==="daily"?"ວັນ":"ຊົ່ວໂມງ"}</td>`:""}
         <td class="num">${worked}</td>
         ${cols.map(c=>`<td class="num">${r.counts[c]||"—"}</td>`).join("")}
-        <td class="num">${r.deduction>0?"−"+formatKip(Math.round(r.deduction)):"—"}</td>
-        <td class="num"><b>${formatKip(r.amount)}</b></td></tr>`;
+        ${isOwner?`<td class="num">${r.deduction>0?"−"+formatKip(Math.round(r.deduction)):"—"}</td>
+        <td class="num"><b>${formatKip(r.amount)}</b></td>`:""}</tr>`;
     }).join("");
     const detail=live.filter(a=>a.date.startsWith(month))
       .sort((a,b)=>a.date.localeCompare(b.date)||String(a.staffId).localeCompare(String(b.staffId)))
@@ -1825,19 +1827,19 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
       }).join("");
     printReport(`
       <h1>👥 ບັນທຶກພະນັກງານ / Staff attendance record</h1>
-      <div class="sub">${esc(month)} · ພິມ ${new Date().toLocaleString("en-GB")} · ວັນເຮັດວຽກ/ເດືອນ ${workDays}</div>
+      <div class="sub">${esc(month)} · ພິມ ${new Date().toLocaleString("en-GB")}${isOwner?` · ວັນເຮັດວຽກ/ເດືອນ ${workDays}`:""}</div>
       <div class="cards">
         <div class="card"><div class="k">ພະນັກງານ / Staff</div><div class="v">${monthRows.length}</div></div>
         <div class="card"><div class="k">ຂາດງານ / Absent days</div><div class="v">${monthRows.reduce((s,r)=>s+(r.counts.absent||0),0)}</div></div>
         <div class="card"><div class="k">ມື້ພັກ / Days off</div><div class="v">${monthRows.reduce((s,r)=>s+(r.counts.dayoff||0),0)}</div></div>
-        <div class="card"><div class="k">ລວມຄ່າແຮງ / Total wages</div><div class="v">${formatKip(wageTotal)}</div></div>
+        ${isOwner?`<div class="card"><div class="k">ລວມຄ່າແຮງ / Total wages</div><div class="v">${formatKip(wageTotal)}</div></div>`:""}
       </div>
       <table>
-        <thead><tr><th>ພະນັກງານ / Staff</th><th>ຕຳແໜ່ງ</th><th>ປະເພດ</th><th class="num">ມາເຮັດວຽກ</th>
+        <thead><tr><th>ພະນັກງານ / Staff</th><th>ຕຳແໜ່ງ</th>${isOwner?"<th>ປະເພດ</th>":""}<th class="num">ມາເຮັດວຽກ</th>
         ${ATT_STATUS.map(s=>`<th class="num">${s.short}</th>`).join("")}
-        <th class="num">ຫັກ / Deduct</th><th class="num">ຈ່າຍ / Pay</th></tr></thead>
-        <tbody>${summary||`<tr><td colspan="${5+ATT_STATUS.length}">—</td></tr>`}</tbody>
-        <tfoot><tr><th colspan="${4+ATT_STATUS.length}">ລວມ / Total</th><th class="num">${formatKip(Math.round(monthRows.reduce((s,r)=>s+r.deduction,0)))}</th><th class="num">${formatKip(wageTotal)}</th></tr></tfoot>
+        ${isOwner?`<th class="num">ຫັກ / Deduct</th><th class="num">ຈ່າຍ / Pay</th>`:""}</tr></thead>
+        <tbody>${summary||`<tr><td colspan="${(isOwner?5:3)+ATT_STATUS.length}">—</td></tr>`}</tbody>
+        ${isOwner?`<tfoot><tr><th colspan="${4+ATT_STATUS.length}">ລວມ / Total</th><th class="num">${formatKip(Math.round(monthRows.reduce((s,r)=>s+r.deduction,0)))}</th><th class="num">${formatKip(wageTotal)}</th></tr></tfoot>`:""}
       </table>
       <h1 style="font-size:16px;margin:18px 0 6px">ລາຍລະອຽດ / Every recorded exception</h1>
       <div class="sub">ວັນທີ່ບໍ່ມີໃນລາຍການນີ້ = ມາເຮັດວຽກປົກກະຕິ · Any date not listed = worked as normal</div>
@@ -1855,7 +1857,7 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
       <div style={{ fontSize:13,color:"#6b7280",marginBottom:16 }}>Staff attendance &amp; wages — {activePeople.length} ຄົນເຮັດວຽກ / active</div>
 
       <div style={{ display:"flex",gap:4,marginBottom:16,background:"#fff",padding:4,borderRadius:10,width:"fit-content",flexWrap:"wrap" }}>
-        {[["attend","📋 ບັນທຶກ"],["cal","📅 ປະຕິທິນ"],["people","👤 ລາຍຊື່"],["wages","💰 ຄ່າແຮງ"]].map(([v,l])=>(
+        {[["attend","📋 ບັນທຶກ"],["cal","📅 ປະຕິທິນ"],...(isOwner?[["people","👤 ລາຍຊື່"],["wages","💰 ຄ່າແຮງ"]]:[])].map(([v,l])=>(
           <button key={v} onClick={()=>setTab(v)} style={{ padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",background:tab===v?"#1a1a2e":"transparent",color:tab===v?"#f4d03f":"#374151",fontWeight:tab===v?700:500,fontSize:13 }}>{l}</button>
         ))}
       </div>
@@ -1983,7 +1985,7 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
       )}
 
       {/* ── STAFF LIST ── */}
-      {tab==="people"&&(
+      {tab==="people"&&isOwner&&(
         <>
           <div style={{ display:"flex",justifyContent:"flex-end",marginBottom:12 }}>
             <button onClick={()=>setEdit({...blank})} style={{ padding:"10px 18px",background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມພະນັກງານ</button>
@@ -2030,7 +2032,7 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
       )}
 
       {/* ── WAGES ── */}
-      {tab==="wages"&&(
+      {tab==="wages"&&isOwner&&(
         <>
           <div style={{ ...card,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap" }}>
             <span style={{ fontSize:13,fontWeight:600 }}>🗓️ ເດືອນ / Month</span>
