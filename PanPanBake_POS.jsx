@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.08-4";
+const BUILD_VERSION = "2026.08.09-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -2989,7 +2989,28 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
 // ============================================================
 function ShiftView({ shifts, sales, currentShift, onOpen, onClose }) {
   const [expanded,setExpanded]=useState(null);
+  const [sortDir,setSortDir]=useState("desc");
+  const [fCashier,setFCashier]=useState("all");
+  const [fFrom,setFFrom]=useState("");
+  const [fTo,setFTo]=useState("");
+  const [hideEmpty,setHideEmpty]=useState(false);
   const orderNet = (o) => o.items.reduce((s,i)=>s+itemPrice(i)*i.qty,0) - (o.discount||0);
+
+  const shiftCashiers=[...new Set(shifts.map(s=>s.cashier).filter(Boolean))].sort();
+  const billsIn=(sh)=>sales.filter(s=>!s.voided&&s.payment!=="foc"&&s.shiftId===sh.id).length;
+  // Sort by the actual open time. Shifts opened or closed on another device
+  // arrive in sync order, which is why the list used to look shuffled.
+  const visibleShifts=shifts.filter(sh=>{
+    if(fCashier!=="all"&&sh.cashier!==fCashier)return false;
+    const d=String(sh.openedAt||"").slice(0,10);
+    if(fFrom&&d<fFrom)return false;
+    if(fTo&&d>fTo)return false;
+    if(hideEmpty&&billsIn(sh)===0)return false;
+    return true;
+  }).sort((a,b)=>{
+    const av=Date.parse(a.openedAt)||0, bv=Date.parse(b.openedAt)||0;
+    return sortDir==="desc"?bv-av:av-bv;
+  });
   return (
     <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
       <h1 style={{ margin:"0 0 4px",fontSize:22,fontWeight:700 }}>🌗 ກະ / Shift</h1>
@@ -3013,7 +3034,33 @@ function ShiftView({ shifts, sales, currentShift, onOpen, onClose }) {
         )}
       </div>
       <div style={{ fontSize:15,fontWeight:700,marginBottom:12 }}>ປະຫວັດກະ</div>
-      {[...shifts].reverse().map(sh=>{
+
+      {/* Filters. The list is sorted by openedAt — the old code just reversed the
+          array, which is sync-arrival order, so shifts closed on another device
+          landed out of sequence. */}
+      <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",padding:12,marginBottom:12,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center" }}>
+        <button onClick={()=>setSortDir(sortDir==="desc"?"asc":"desc")} style={{ padding:"8px 12px",borderRadius:8,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:12,fontWeight:700,whiteSpace:"nowrap" }}>
+          {sortDir==="desc"?"🔽 ໃໝ່ສຸດກ່ອນ / Newest":"🔼 ເກົ່າສຸດກ່ອນ / Oldest"}
+        </button>
+        <select value={fCashier} onChange={e=>setFCashier(e.target.value)} style={{ padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:12,background:"#fff",cursor:"pointer" }}>
+          <option value="all">👥 ທຸກຄົນ / All staff</option>
+          {shiftCashiers.map(c=><option key={c} value={c}>{c}</option>)}
+        </select>
+        <input type="date" value={fFrom} onChange={e=>setFFrom(e.target.value)} title="ແຕ່ວັນທີ / From" style={{ padding:"7px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:12 }} />
+        <span style={{ color:"#9ca3af",fontSize:12 }}>→</span>
+        <input type="date" value={fTo} onChange={e=>setFTo(e.target.value)} title="ຫາວັນທີ / To" style={{ padding:"7px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:12 }} />
+        <label style={{ display:"flex",alignItems:"center",gap:6,fontSize:12,cursor:"pointer",whiteSpace:"nowrap" }}>
+          <input type="checkbox" checked={hideEmpty} onChange={e=>setHideEmpty(e.target.checked)} /> ເຊື່ອງກະທີ່ບໍ່ມີບິນ / Hide empty
+        </label>
+        {(fCashier!=="all"||fFrom||fTo||hideEmpty)&&(
+          <button onClick={()=>{setFCashier("all");setFFrom("");setFTo("");setHideEmpty(false);}} style={{ padding:"8px 12px",borderRadius:8,border:"1px solid #fecaca",background:"#fef2f2",color:"#dc2626",cursor:"pointer",fontSize:12,fontWeight:600 }}>✕ ລ້າງ / Clear</button>
+        )}
+        <div style={{ marginLeft:"auto",fontSize:12,color:"#6b7280",whiteSpace:"nowrap" }}>{visibleShifts.length} / {shifts.length} ກະ</div>
+      </div>
+
+      {visibleShifts.length===0&&<div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",padding:24,textAlign:"center",color:"#9ca3af",fontSize:13 }}>ບໍ່ພົບກະຕາມເງື່ອນໄຂ / No shifts match these filters</div>}
+
+      {visibleShifts.map(sh=>{
         const ss=sales.filter(s=>!s.voided&&s.payment!=="foc"&&s.shiftId===sh.id);
         const cashR=ss.filter(s=>s.payment==="cash").reduce((a,s)=>a+orderNet(s),0);
         const qrR=ss.filter(s=>s.payment==="qr").reduce((a,s)=>a+orderNet(s),0);
