@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.12-5";
+const BUILD_VERSION = "2026.08.12-6";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -317,6 +317,16 @@ function shrinkImage(dataUrl, maxW = 560, quality = 0.75) {
 }
 
 // Stable per-device id (for push subscriptions — so a device isn't pushed its own sale).
+// Names a push subscription so duplicates are diagnosable. Safari and the
+// home-screen app on the same phone are separate installs with separate
+// subscriptions — this makes that visible instead of two anonymous rows.
+function deviceLabel() {
+  try {
+    const standalone = window.matchMedia?.("(display-mode: standalone)")?.matches || window.navigator.standalone;
+    return `${navigator.platform || "?"} ${standalone ? "(app)" : "(browser)"}`;
+  } catch { return "?"; }
+}
+
 function getDeviceId() {
   let id = stor.get("deviceId", null);
   if (!id) { id = "dev-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36); stor.set("deviceId", id); }
@@ -3263,7 +3273,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
                     <button onClick={async()=>{
                       setPushMsg("… ກຳລັງຕັ້ງຄ່າ / setting up…");
                       if(on){ await disablePush(getDeviceId()); stor.set("pushOn",false); setPushMsg("ປິດແລ້ວ / Push turned off."); }
-                      else { const r=await enablePush(getDeviceId(), navigator.platform||null); if(r.ok){ stor.set("pushOn",true); setPushMsg("✓ ເປີດແລ້ວ! ເຄື່ອງນີ້ຈະໄດ້ຮັບ push ເມື່ອມີການຂາຍ / Enabled — this device will get a push on every sale."); } else { setPushMsg(r.error==="denied"?"❌ ຖືກປະຕິເສດ (ອະນຸຍາດແຈ້ງເຕືອນໃນ browser ກ່ອນ) / Notification permission denied.":"❌ ຕັ້ງຄ່າບໍ່ໄດ້: "+r.error); } }
+                      else { const r=await enablePush(getDeviceId(), deviceLabel()); if(r.ok){ stor.set("pushOn",true); setPushMsg("✓ ເປີດແລ້ວ! ເຄື່ອງນີ້ຈະໄດ້ຮັບ push ເມື່ອມີການຂາຍ / Enabled — this device will get a push on every sale."); } else { setPushMsg(r.error==="denied"?"❌ ຖືກປະຕິເສດ (ອະນຸຍາດແຈ້ງເຕືອນໃນ browser ກ່ອນ) / Notification permission denied.":"❌ ຕັ້ງຄ່າບໍ່ໄດ້: "+r.error); } }
                       setSoundTick(t=>t+1);
                     }} style={{ width:"100%",padding:"12px 10px",borderRadius:10,cursor:"pointer",fontSize:13,fontWeight:700,border:"none",background:on?"#16a34a":"#e5e7eb",color:on?"#fff":"#374151" }}>{on?"📲 ເປີດຢູ່ / Push ON (tap to turn off)":"📲 ເປີດ Push / Enable push on this device"}</button>
                     {pushMsg && <div style={{ fontSize:12,color:"#374151",marginTop:8,background:"#f3f4f6",borderRadius:8,padding:"8px 10px",lineHeight:1.5 }}>{pushMsg}</div>}
@@ -3667,7 +3677,14 @@ export default function App() {
     const text = `${formatKip(netv)}${r.cashier?` · ${r.cashier}`:""}`;
     setSaleAlert({ text, t: Date.now() });
     playSaleSound();
-    try { if ("Notification" in window && Notification.permission === "granted") new Notification("🔔 ຂາຍໃໝ່ / New sale", { body: text, tag: r.id }); } catch {}
+    // Two systems can announce the same sale: this one (spotted by the sync poll)
+    // and Web Push (sent by the other device). Raise an OS notification here only
+    // when push is off on this device, otherwise the phone buzzes twice per sale.
+    // The on-screen toast and the chime always run — they don't duplicate a push.
+    try {
+      if (!stor.get("pushOn", false) && "Notification" in window && Notification.permission === "granted")
+        new Notification("🔔 ຂາຍໃໝ່ / New sale", { body: text, tag: r.id });
+    } catch {}
   };
   const [layoutMode,setLayoutMode]=useState(()=>stor.get("layoutMode","auto"));
   const vp = useWindowSize();
@@ -3738,7 +3755,7 @@ export default function App() {
 
   // If closed-app push was enabled on this device, refresh the subscription on load
   // (subscriptions can rotate/expire).
-  useEffect(() => { if (stor.get("pushOn", false)) ensurePush(getDeviceId()); }, []);
+  useEffect(() => { if (stor.get("pushOn", false)) ensurePush(getDeviceId(), deviceLabel()); }, []);
 
   // One-time repair for menus saved by older builds, which stored the raw camera
   // photo (one was 1.3MB; the whole menu blob reached 7MB). That overflowed
