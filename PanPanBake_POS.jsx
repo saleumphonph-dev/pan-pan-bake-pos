@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.12-3";
+const BUILD_VERSION = "2026.08.12-4";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -3641,7 +3641,7 @@ export default function App() {
   const notifySale = (r) => {
     if (!stor.get("alertOn", true)) return;
     const netv = r.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0) - (r.discount||0);
-    const text = `${K(netv)}${r.cashier?` · ${r.cashier}`:""}`;
+    const text = `${formatKip(netv)}${r.cashier?` · ${r.cashier}`:""}`;
     setSaleAlert({ text, t: Date.now() });
     playSaleSound();
     try { if ("Notification" in window && Notification.permission === "granted") new Notification("🔔 ຂາຍໃໝ່ / New sale", { body: text, tag: r.id }); } catch {}
@@ -3939,14 +3939,14 @@ export default function App() {
     const row={ id, name:"Staff wages (from 👥)", nameLao:"ຄ່າແຮງພະນັກງານ", type:"fixed", category:"salary", amount, month, deleted:false };
     const u=expenses.some(e=>e.id===id)?expenses.map(e=>e.id===id?row:e):[...expenses,row];
     setExpenses(u); stor.set("expenses",u); pushExpense(row);
-    alert(`✅ ສົ່ງໄປບັນຊີແລ້ວ: ${K(amount)} (${month})\nເບິ່ງໄດ້ທີ່ 📒 ບັນຊີ → ໝວດ 👥 ເງິນເດືອນ\n\nPosted to accounts — see 📒 ບັນຊີ under 👥 ເງິນເດືອນ.`);
+    alert(`✅ ສົ່ງໄປບັນຊີແລ້ວ: ${formatKip(amount)} (${month})\nເບິ່ງໄດ້ທີ່ 📒 ບັນຊີ → ໝວດ 👥 ເງິນເດືອນ\n\nPosted to accounts — see 📒 ບັນຊີ under 👥 ເງິນເດືອນ.`);
   };
   const addSale=(o)=>{
     if(seenSaleIds.current)seenSaleIds.current.add(o.id);
     const u=[...sales,o];setSales(u);stor.set("sales",u);pushOrder(o);
     // Push to OTHER devices (even if their app is closed). Fire-and-forget.
     const net=o.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0)-(o.discount||0);
-    sendSalePush({ title:"🔔 ຂາຍໃໝ່ / New sale", body:`${K(net)}${o.cashier?` · ${o.cashier}`:""}`, fromDeviceId:getDeviceId() });
+    sendSalePush({ title:"🔔 ຂາຍໃໝ່ / New sale", body:`${formatKip(net)}${o.cashier?` · ${o.cashier}`:""}`, fromDeviceId:getDeviceId() });
   };
   const updateSale=(o)=>{ const u=sales.map(s=>s.id===o.id?o:s);setSales(u);stor.set("sales",u);pushOrder(o); };
   const openShift=({cash,notes})=>{ const s={id:genId(),openedAt:new Date().toISOString(),openingCash:cash,cashier:ROLES[role].label,notes};const u=[...shifts,s];setShifts(u);stor.set("shifts",u);pushShift(s);setShiftModal(null); };
