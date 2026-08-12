@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.12-1";
+const BUILD_VERSION = "2026.08.12-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -3024,8 +3024,12 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
 // ============================================================
 // SHIFT VIEW
 // ============================================================
-function ShiftView({ shifts, sales, currentShift, onOpen, onClose }) {
+function ShiftView({ shifts, sales, currentShift, onOpen, onClose, masked, onToggleNumbers }) {
   const [expanded,setExpanded]=useState(null);
+  const todayStr=new Date().toISOString().slice(0,10);
+  // Today's takings stay visible (the person on duty counts the till against
+  // them); anything from an earlier day is hidden unless the owner PIN is given.
+  const KS=(sh,v)=> (masked && String(sh.openedAt||"").slice(0,10)!==todayStr) ? MASK : formatKip(v);
   const [sortDir,setSortDir]=useState("desc");
   const [fCashier,setFCashier]=useState("all");
   const [fFrom,setFFrom]=useState("");
@@ -3092,7 +3096,10 @@ function ShiftView({ shifts, sales, currentShift, onOpen, onClose }) {
         {(fCashier!=="all"||fFrom||fTo||hideEmpty)&&(
           <button onClick={()=>{setFCashier("all");setFFrom("");setFTo("");setHideEmpty(false);}} style={{ padding:"8px 12px",borderRadius:8,border:"1px solid #fecaca",background:"#fef2f2",color:"#dc2626",cursor:"pointer",fontSize:12,fontWeight:600 }}>✕ ລ້າງ / Clear</button>
         )}
-        <div style={{ marginLeft:"auto",fontSize:12,color:"#6b7280",whiteSpace:"nowrap" }}>{visibleShifts.length} / {shifts.length} ກະ</div>
+        <div style={{ marginLeft:"auto",display:"flex",alignItems:"center",gap:8 }}>
+          <EyeToggle masked={masked} onToggle={onToggleNumbers} />
+          <span style={{ fontSize:12,color:"#6b7280",whiteSpace:"nowrap" }}>{visibleShifts.length} / {shifts.length} ກະ</span>
+        </div>
       </div>
 
       {visibleShifts.length===0&&<div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",padding:24,textAlign:"center",color:"#9ca3af",fontSize:13 }}>ບໍ່ພົບກະຕາມເງື່ອນໄຂ / No shifts match these filters</div>}
@@ -3111,7 +3118,7 @@ function ShiftView({ shifts, sales, currentShift, onOpen, onClose }) {
                 <div style={{ fontSize:14,fontWeight:700 }}>{fmtDate(sh.openedAt)} · {sh.cashier}{open&&<span style={{ marginLeft:8,fontSize:10,background:"#dcfce7",color:"#16a34a",padding:"2px 6px",borderRadius:3 }}>ເປີດ</span>}</div>
                 <div style={{ fontSize:12,color:"#6b7280" }}>{fmtTime(sh.openedAt)}{sh.closedAt&&` → ${fmtTime(sh.closedAt)}`} · {ss.length} ໃບ</div>
               </div>
-              <div style={{ textAlign:"right" }}><div style={{ fontSize:15,fontWeight:700,color:"#7c3aed" }}>{formatKip(total)}</div>{sh.variance!=null&&sh.variance!==0&&<div style={{ fontSize:11,color:sh.variance>0?"#16a34a":"#dc2626" }}>{sh.variance>0?"+":""}{formatKip(sh.variance)}</div>}</div>
+              <div style={{ textAlign:"right" }}><div style={{ fontSize:15,fontWeight:700,color:"#7c3aed" }}>{KS(sh,total)}</div>{sh.variance!=null&&sh.variance!==0&&<div style={{ fontSize:11,color:sh.variance>0?"#16a34a":"#dc2626" }}>{sh.variance>0?"+":""}{KS(sh,sh.variance)}</div>}</div>
               <span style={{ color:"#9ca3af" }}>{expanded===sh.id?"▲":"▼"}</span>
             </div>
             {expanded===sh.id&&(
@@ -3120,16 +3127,16 @@ function ShiftView({ shifts, sales, currentShift, onOpen, onClose }) {
                   {[["💵 ສົດ",cashR,"#16a34a"],["📲 QR",qrR,"#7c3aed"],["🏦 ໂອນ",tfR,"#2563eb"],["🧾",ss.length,"#374151"]].map(([l,v,c])=>(
                     <div key={l} style={{ background:"#fff",padding:8,borderRadius:7,textAlign:"center" }}>
                       <div style={{ fontSize:11,color:"#6b7280" }}>{l}</div>
-                      <div style={{ fontWeight:700,color:c,fontSize:12 }}>{typeof v==="number"&&l!=="🧾"?formatKip(v):v}</div>
+                      <div style={{ fontWeight:700,color:c,fontSize:12 }}>{typeof v==="number"&&l!=="🧾"?KS(sh,v):v}</div>
                     </div>
                   ))}
                 </div>
                 <div style={{ background:"#fff",padding:10,borderRadius:7,fontSize:12 }}>
-                  <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ເງິນເລີ່ມ</span><span>{formatKip(sh.openingCash)}</span></div>
+                  <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ເງິນເລີ່ມ</span><span>{KS(sh,sh.openingCash)}</span></div>
                   {sh.closedAt&&<>
-                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ຄາດວ່າ</span><span>{formatKip(sh.expectedCash||0)}</span></div>
-                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ນັບໄດ້</span><span style={{ fontWeight:700 }}>{formatKip(sh.closingCash)}</span></div>
-                    <div style={{ display:"flex",justifyContent:"space-between",borderTop:"1px dashed #e5e7eb",paddingTop:4,fontWeight:700 }}><span>ສ່ວນຕ່າງ</span><span style={{ color:sh.variance>=0?"#16a34a":"#dc2626" }}>{sh.variance>=0?"+":""}{formatKip(sh.variance)}</span></div>
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ຄາດວ່າ</span><span>{KS(sh,sh.expectedCash||0)}</span></div>
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ນັບໄດ້</span><span style={{ fontWeight:700 }}>{KS(sh,sh.closingCash)}</span></div>
+                    <div style={{ display:"flex",justifyContent:"space-between",borderTop:"1px dashed #e5e7eb",paddingTop:4,fontWeight:700 }}><span>ສ່ວນຕ່າງ</span><span style={{ color:sh.variance>=0?"#16a34a":"#dc2626" }}>{sh.variance>=0?"+":""}{KS(sh,sh.variance)}</span></div>
                   </>}
                   {sh.notes&&<div style={{ marginTop:6,fontSize:11,color:"#6b7280",fontStyle:"italic" }}>📝 {sh.notes}</div>}
                 </div>
@@ -3773,7 +3780,7 @@ export default function App() {
         }}>🔔 ຂາຍໃໝ່ / New sale &nbsp;·&nbsp; {saleAlert.text}</div>
       )}
       {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
-      {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
+      {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="dashboard"&&<DashboardView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
@@ -3802,7 +3809,7 @@ export default function App() {
         <UpdateBanner />
         <OfflineBanner />
         {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
-        {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
+        {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="dashboard"&&<DashboardView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
