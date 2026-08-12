@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.09-1";
+const BUILD_VERSION = "2026.08.09-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -76,6 +76,23 @@ const EXPENSE_CATS = {
   ],
 };
 const COGS_IDS = ["ingredients", "packaging"];
+
+// ── Hidden amounts (manager view) ─────────────────────────────────────
+// Money figures are replaced with dots until the owner PIN is entered. This is
+// a privacy screen for over-the-shoulder viewing, not encryption — the numbers
+// are still computed, just not drawn.
+const MASK = "••••••";
+const maskKip = (masked, v) => masked ? MASK : formatKip(v);
+function EyeToggle({ masked, onToggle }) {
+  if (onToggle === undefined) return null;
+  return (
+    <button onClick={onToggle} title={masked ? "ຕ້ອງໃສ່ລະຫັດເຈົ້າຂອງ / owner PIN required" : "ເຊື່ອງຕົວເລກ / hide amounts"}
+      style={{ padding:"7px 12px",borderRadius:8,cursor:"pointer",fontSize:12,fontWeight:700,whiteSpace:"nowrap",
+        border:masked?"1px solid #fde68a":"1px solid #e5e7eb", background:masked?"#fffbeb":"#fff", color:masked?"#b45309":"#374151" }}>
+      {masked ? "🙈 ເບິ່ງຕົວເລກ / Show" : "👁️ ເຊື່ອງ / Hide"}
+    </button>
+  );
+}
 
 // ── Staff & attendance ────────────────────────────────────────────────
 // Attendance is stored as EXCEPTIONS ONLY: a day with no row means the person
@@ -1504,7 +1521,8 @@ function UpdateBanner() {
 }
 
 // ── Dashboard ─────────────────────────────────────────────────
-function DashboardView({ sales }) {
+function DashboardView({ sales, masked, onToggleNumbers }) {
+  const K = (v) => maskKip(masked, v);
   const [range, setRange] = useState("today");
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
   const [aiInsight, setAiInsight] = useState("");
@@ -1602,7 +1620,7 @@ function DashboardView({ sales }) {
 
   const getAI = async () => {
     setLoadingAI(true);
-    const summary = `Pan Pan Bake Vientiane, ${range}: Revenue ${formatKip(totalRevenue)}, Orders ${totalOrders}, Avg ${formatKip(avg)}, Cash ${formatKip(cashSales)}, QR ${formatKip(qrSales)}, FOC ${focCount}, Top: ${topItems.slice(0,5).map(i=>`${i.name}(${i.qty})`).join(", ")}`;
+    const summary = `Pan Pan Bake Vientiane, ${range}: Revenue ${K(totalRevenue)}, Orders ${totalOrders}, Avg ${K(avg)}, Cash ${K(cashSales)}, QR ${K(qrSales)}, FOC ${focCount}, Top: ${topItems.slice(0,5).map(i=>`${i.name}(${i.qty})`).join(", ")}`;
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, messages:[{ role:"user", content:`Business analyst for Lao bakery. 3-4 actionable insights in Lao+English bullets:\n${summary}` }] }) });
       const d = await res.json();
@@ -1621,6 +1639,7 @@ function DashboardView({ sales }) {
           <div style={{ fontSize:13, color:"#6b7280" }}>ລາຍງານຍອດຂາຍ</div>
         </div>
         <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+          <EyeToggle masked={masked} onToggle={onToggleNumbers} />
           <SyncBadge />
         </div>
       </div>
@@ -1641,11 +1660,11 @@ function DashboardView({ sales }) {
       {/* KPI Cards */}
       <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))", gap:12, marginBottom:20 }}>
         {[
-          ["💰","ລາຍໄດ້",formatKip(totalRevenue),"#7c3aed"],
+          ["💰","ລາຍໄດ້",K(totalRevenue),"#7c3aed"],
           ["🧾","ໃບບິນ",totalOrders,"#16a34a"],
-          ["📈","ສະເລ່ຍ",formatKip(avg),"#2563eb"],
-          ["💵","ສົດ",formatKip(cashSales),"#ea580c"],
-          ["📲","QR",formatKip(qrSales),"#7c3aed"],
+          ["📈","ສະເລ່ຍ",K(avg),"#2563eb"],
+          ["💵","ສົດ",K(cashSales),"#ea580c"],
+          ["📲","QR",K(qrSales),"#7c3aed"],
           ["🎁","FOC",focCount+" ໃບ","#6b7280"],
         ].map(([ic,l,v,c]) => (
           <div key={l} style={{ background:"#fff", borderRadius:12, padding:14, border:"1px solid #e5e7eb" }}>
@@ -1706,7 +1725,7 @@ function DashboardView({ sales }) {
                       <span style={{ fontSize:10, color:"#9ca3af", whiteSpace:"nowrap" }}>{it.qty} ຊິ້ນ</span>
                     </div>
                   </div>
-                  <div style={{ fontSize:11, fontWeight:700, color:"#7c3aed", whiteSpace:"nowrap" }}>{formatKip(it.rev)}</div>
+                  <div style={{ fontSize:11, fontWeight:700, color:"#7c3aed", whiteSpace:"nowrap" }}>{K(it.rev)}</div>
                 </div>
               ))
           }
@@ -1744,7 +1763,7 @@ function DashboardView({ sales }) {
             return (
               <div key={m.label} style={{ textAlign:"center", padding:10 }}>
                 <div style={{ fontSize:13, marginBottom:6 }}>{m.label}</div>
-                <div style={{ fontSize:15, fontWeight:700, color:m.color }}>{formatKip(m.value)}</div>
+                <div style={{ fontSize:15, fontWeight:700, color:m.color }}>{K(m.value)}</div>
                 <div style={{ fontSize:11, color:"#9ca3af", marginTop:2 }}>{pct.toFixed(1)}%</div>
                 <div style={{ height:5, background:"#f3f4f6", borderRadius:3, marginTop:8, overflow:"hidden" }}>
                   <div style={{ height:"100%", background:m.color, borderRadius:3, width:`${pct}%`, transition:"width 0.5s ease" }} />
@@ -2138,7 +2157,8 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
 // ============================================================
 // ACCOUNTING (with addons in revenue)
 // ============================================================
-function AccountingView({ sales, expenses, onAddExpense, onDeleteExpense }) {
+function AccountingView({ sales, expenses, masked, onToggleNumbers, onAddExpense, onDeleteExpense }) {
+  const K = (v) => maskKip(masked, v);
   const [form,setForm]=useState({name:"",nameLao:"",type:"variable",category:"ingredients",amount:"",month:new Date().toISOString().slice(0,7)});
   const [sel,setSel]=useState(new Date().toISOString().slice(0,7));
   const allCats=[...EXPENSE_CATS.fixed,...EXPENSE_CATS.variable];
@@ -2174,7 +2194,10 @@ function AccountingView({ sales, expenses, onAddExpense, onDeleteExpense }) {
     <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20 }}>
         <div><h1 style={{ margin:0,fontSize:22,fontWeight:700 }}>📒 ບັນຊີ</h1><div style={{ fontSize:13,color:"#6b7280" }}>Income Statement</div></div>
-        <input type="month" value={sel} onChange={e=>setSel(e.target.value)} style={{ padding:"8px 12px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14 }} />
+        <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}>
+          <EyeToggle masked={masked} onToggle={onToggleNumbers} />
+          <input type="month" value={sel} onChange={e=>setSel(e.target.value)} style={{ padding:"8px 12px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14 }} />
+        </div>
       </div>
       <div style={{ background:"#fff",borderRadius:12,padding:20,border:"1px solid #e5e7eb",marginBottom:16 }}>
         <div style={{ fontSize:15,fontWeight:700,marginBottom:14 }}>📊 ລາຍງານ {sel}</div>
@@ -2190,7 +2213,7 @@ function AccountingView({ sales, expenses, onAddExpense, onDeleteExpense }) {
             <span style={{ fontSize:r.big?15:13,fontWeight:r.big||r.bold?700:500 }}>{r.label}</span>
             <span style={{ display:"flex",gap:8,alignItems:"center" }}>
               {r.extra&&<span style={{ fontSize:11,color:"#6b7280",background:"#f3f4f6",padding:"2px 6px",borderRadius:4 }}>{r.extra}</span>}
-              <span style={{ fontSize:r.big?18:14,fontWeight:700,color:r.color }}>{formatKip(r.val)}</span>
+              <span style={{ fontSize:r.big?18:14,fontWeight:700,color:r.color }}>{K(r.val)}</span>
             </span>
           </div>
         ))}
@@ -2229,7 +2252,7 @@ function AccountingView({ sales, expenses, onAddExpense, onDeleteExpense }) {
                   <div key={c.id} style={{ marginBottom:12 }}>
                     <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}>
                       <span style={{ fontSize:12,fontWeight:600 }}>{c.label}{isCogs&&<span style={{ marginLeft:4,fontSize:9,background:"#fef3c7",color:"#d97706",padding:"1px 4px",borderRadius:3 }}>COGS</span>}</span>
-                      <span style={{ fontSize:12,fontWeight:700,color:"#dc2626" }}>{formatKip(c.total)}</span>
+                      <span style={{ fontSize:12,fontWeight:700,color:"#dc2626" }}>{K(c.total)}</span>
                     </div>
                     <div style={{ height:5,background:"#f3f4f6",borderRadius:3,overflow:"hidden",marginBottom:3 }}>
                       <div style={{ height:"100%",width:`${pct}%`,background:c.type==="fixed"?"#7c3aed":isCogs?"#d97706":"#ea580c" }} />
@@ -2252,7 +2275,7 @@ function AccountingView({ sales, expenses, onAddExpense, onDeleteExpense }) {
                 <span style={{ fontSize:10,padding:"2px 6px",borderRadius:4,background:e.type==="fixed"?"#ede9fe":"#fef3c7",color:e.type==="fixed"?"#7c3aed":"#d97706" }}>{e.type==="fixed"?"ຄົງ":"ແປ"}</span>
                 <span style={{ fontSize:11,color:"#6b7280",minWidth:80 }}>{cat?.label}</span>
                 <div style={{ flex:1 }}><div style={{ fontSize:13,fontWeight:600 }}>{e.name}</div>{e.nameLao&&<div style={{ fontSize:11,color:"#6b7280" }}>{e.nameLao}</div>}</div>
-                <span style={{ fontSize:13,fontWeight:700,color:"#dc2626" }}>{formatKip(e.amount)}</span>
+                <span style={{ fontSize:13,fontWeight:700,color:"#dc2626" }}>{K(e.amount)}</span>
                 <button onClick={()=>delExp(e.id)} style={{ padding:"4px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>✕</button>
               </div>
             );
@@ -3146,7 +3169,8 @@ function printReport(innerHtml) {
   setTimeout(() => { t0 = Date.now(); try { window.print(); } catch (e) { restore(); return; } setTimeout(restore, 180000); }, 200);
 }
 
-function ReportView({ sales }) {
+function ReportView({ sales, masked, onToggleNumbers }) {
+  const K = (v) => maskKip(masked, v);
   const [period, setPeriod] = useState("month");
   const [anchor, setAnchor] = useState(() => new Date());
   const orderNet = (o) => o.items.reduce((s,i)=>s+itemPrice(i)*i.qty,0) - (o.discount||0);
@@ -3195,25 +3219,25 @@ function ReportView({ sales }) {
   const esc=(s)=>String(s||"").replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
   const doPrint=()=>{
-    const rows=items.map(it=>`<tr><td>${esc(it.name)}${it.nameLao?` <small style="color:#777">${esc(it.nameLao)}</small>`:""}</td><td class="num">${it.qty}</td><td class="num">${formatKip(it.rev)}</td><td class="num">${revenue?((it.rev/revenue)*100).toFixed(1):0}%</td></tr>`).join("");
+    const rows=items.map(it=>`<tr><td>${esc(it.name)}${it.nameLao?` <small style="color:#777">${esc(it.nameLao)}</small>`:""}</td><td class="num">${it.qty}</td><td class="num">${K(it.rev)}</td><td class="num">${revenue?((it.rev/revenue)*100).toFixed(1):0}%</td></tr>`).join("");
     const html=`<h1>ລາຍງານການຂາຍ / Sales Report</h1>
     <div class="sub">${esc(label)} &nbsp;·&nbsp; ພິມ ${new Date().toLocaleString("en-GB")}</div>
     <div class="cards">
-      <div class="card"><div class="k">ລາຍຮັບ / Revenue</div><div class="v">${formatKip(revenue)}</div></div>
+      <div class="card"><div class="k">ລາຍຮັບ / Revenue</div><div class="v">${K(revenue)}</div></div>
       <div class="card"><div class="k">ໃບບິນ / Bills</div><div class="v">${bills}</div></div>
       <div class="card"><div class="k">ສິນຄ້າຂາຍ / Items sold</div><div class="v">${itemsSold}</div></div>
-      <div class="card"><div class="k">ສະເລ່ຍ/ໃບ / Avg per bill</div><div class="v">${formatKip(avg)}</div></div>
+      <div class="card"><div class="k">ສະເລ່ຍ/ໃບ / Avg per bill</div><div class="v">${K(avg)}</div></div>
     </div>
     <table><thead><tr><th>ການຈ່າຍ / Payment</th><th class="num">ຈຳນວນ / Amount</th></tr></thead><tbody>
-      <tr><td>ເງິນສົດ / Cash</td><td class="num">${formatKip(cash)}</td></tr>
-      <tr><td>QR</td><td class="num">${formatKip(qr)}</td></tr>
-      <tr><td>ໂອນ / Transfer</td><td class="num">${formatKip(transfer)}</td></tr>
-      <tr><td>ສ່ວນຫຼຸດ / Discount</td><td class="num">-${formatKip(discount)}</td></tr>
+      <tr><td>ເງິນສົດ / Cash</td><td class="num">${K(cash)}</td></tr>
+      <tr><td>QR</td><td class="num">${K(qr)}</td></tr>
+      <tr><td>ໂອນ / Transfer</td><td class="num">${K(transfer)}</td></tr>
+      <tr><td>ສ່ວນຫຼຸດ / Discount</td><td class="num">-${K(discount)}</td></tr>
       <tr><td>ຍົກເລີກ / Voids · ຟຣີ / FOC</td><td class="num">${voids} · ${foc}</td></tr>
     </tbody></table>
     <table><thead><tr><th>ສິນຄ້າ / Item</th><th class="num">ຈຳນວນ / Qty</th><th class="num">ລາຍຮັບ / Revenue</th><th class="num">%</th></tr></thead>
     <tbody>${rows||`<tr><td colspan="4">ບໍ່ມີຂໍ້ມູນ / No data</td></tr>`}</tbody>
-    <tfoot><tr><th>ລວມ / Total</th><th class="num">${itemsSold}</th><th class="num">${formatKip(revenue)}</th><th class="num">100%</th></tr></tfoot></table>`;
+    <tfoot><tr><th>ລວມ / Total</th><th class="num">${itemsSold}</th><th class="num">${K(revenue)}</th><th class="num">100%</th></tr></tfoot></table>`;
     setTimeout(()=>printReport(html),50);
   };
 
@@ -3223,7 +3247,10 @@ function ReportView({ sales }) {
     <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
       <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10,marginBottom:14 }}>
         <div><h1 style={{ margin:0,fontSize:22,fontWeight:700 }}>📈 ລາຍງານ / Report</h1><div style={{ fontSize:13,color:"#6b7280" }}>ສະຫຼຸບການຂາຍ ແລະ ສິນຄ້າຂາຍດີ</div></div>
-        <button onClick={doPrint} style={{ padding:"10px 18px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14 }}>🖨️ ພິມ / ບັນທຶກ PDF</button>
+        <div style={{ display:"flex",gap:8,alignItems:"center",flexWrap:"wrap" }}>
+          <EyeToggle masked={masked} onToggle={onToggleNumbers} />
+          <button onClick={doPrint} style={{ padding:"10px 18px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14 }}>🖨️ ພິມ / ບັນທຶກ PDF</button>
+        </div>
       </div>
 
       {/* Period selector */}
@@ -3241,10 +3268,10 @@ function ReportView({ sales }) {
 
       {/* Summary cards */}
       <div style={{ display:"flex",flexWrap:"wrap",gap:10,marginBottom:16 }}>
-        <Card k="ລາຍຮັບ / Revenue" v={formatKip(revenue)} c="#16a34a" />
+        <Card k="ລາຍຮັບ / Revenue" v={K(revenue)} c="#16a34a" />
         <Card k="ໃບບິນ / Bills" v={bills} />
         <Card k="ສິນຄ້າຂາຍ / Items sold" v={itemsSold} />
-        <Card k="ສະເລ່ຍ/ໃບ / Avg per bill" v={formatKip(avg)} />
+        <Card k="ສະເລ່ຍ/ໃບ / Avg per bill" v={K(avg)} />
       </div>
 
       {/* Payment + extras */}
@@ -3252,11 +3279,11 @@ function ReportView({ sales }) {
         <div style={{ fontSize:14,fontWeight:700,marginBottom:10 }}>💳 ຕາມການຈ່າຍ / By payment</div>
         {[["💵 ເງິນສົດ / Cash",cash],["📲 QR",qr],["🏦 ໂອນ / Transfer",transfer]].map(([l,v])=>(
           <div key={l} style={{ display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #f3f4f6",fontSize:14 }}>
-            <span>{l}</span><span style={{ fontWeight:700 }}>{formatKip(v)}{revenue>0&&<span style={{ color:"#9ca3af",fontWeight:400,fontSize:12,marginLeft:6 }}>{((v/revenue)*100).toFixed(0)}%</span>}</span>
+            <span>{l}</span><span style={{ fontWeight:700 }}>{K(v)}{revenue>0&&<span style={{ color:"#9ca3af",fontWeight:400,fontSize:12,marginLeft:6 }}>{((v/revenue)*100).toFixed(0)}%</span>}</span>
           </div>
         ))}
         <div style={{ display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:13,color:"#6b7280",marginTop:4 }}>
-          <span>ສ່ວນຫຼຸດ / Discount: <b style={{ color:"#dc2626" }}>-{formatKip(discount)}</b></span>
+          <span>ສ່ວນຫຼຸດ / Discount: <b style={{ color:"#dc2626" }}>-{K(discount)}</b></span>
           <span>ຍົກເລີກ / Void: <b>{voids}</b> · FOC: <b>{foc}</b></span>
         </div>
       </div>
@@ -3279,7 +3306,7 @@ function ReportView({ sales }) {
                     <td style={{ padding:"6px 8px",color:"#9ca3af" }}>{i+1}</td>
                     <td style={{ padding:"6px 8px" }}>{it.emoji} {it.name} <span style={{ color:"#9ca3af" }}>{it.nameLao}</span></td>
                     <td style={{ padding:"6px 8px",textAlign:"right",fontWeight:700 }}>{it.qty}</td>
-                    <td style={{ padding:"6px 8px",textAlign:"right",fontWeight:700,color:"#7c3aed" }}>{formatKip(it.rev)}</td>
+                    <td style={{ padding:"6px 8px",textAlign:"right",fontWeight:700,color:"#7c3aed" }}>{K(it.rev)}</td>
                     <td style={{ padding:"6px 8px",textAlign:"right",color:"#6b7280" }}>{revenue?((it.rev/revenue)*100).toFixed(1):0}%</td>
                   </tr>
                 ))}
@@ -3287,7 +3314,7 @@ function ReportView({ sales }) {
               <tfoot><tr style={{ borderTop:"2px solid #1a1a2e",fontWeight:700 }}>
                 <td></td><td style={{ padding:"8px" }}>ລວມ / Total</td>
                 <td style={{ padding:"8px",textAlign:"right" }}>{itemsSold}</td>
-                <td style={{ padding:"8px",textAlign:"right" }}>{formatKip(revenue)}</td><td style={{ padding:"8px",textAlign:"right" }}>100%</td>
+                <td style={{ padding:"8px",textAlign:"right" }}>{K(revenue)}</td><td style={{ padding:"8px",textAlign:"right" }}>100%</td>
               </tr></tfoot>
             </table>
           </div>
@@ -3304,7 +3331,7 @@ const NAV=[
   {id:"report",label:"ລາຍງານ",icon:"📈",roles:["manager","owner"]},
   {id:"history",label:"ປະຫວັດ",icon:"🧾",roles:["manager","owner"]},
   {id:"staff",label:"ພະນັກງານ",icon:"👥",roles:["manager","owner"]},
-  {id:"accounting",label:"ບັນຊີ",icon:"📒",roles:["owner"]},
+  {id:"accounting",label:"ບັນຊີ",icon:"📒",roles:["manager","owner"]},
   {id:"admin",label:"ຈັດການ",icon:"⚙️",roles:["manager","owner"]},
 ];
 const ROLES={ cashier:{label:"ພະນັກງານ",en:"Cashier",pin:"1234"}, manager:{label:"ຜູ້ຈັດການ",en:"Manager",pin:"5555"}, owner:{label:"ເຈົ້າຂອງ",en:"Owner",pin:"556559"} };
@@ -3317,6 +3344,19 @@ export default function App() {
   const [pin,setPin]=useState("");
   const [pinErr,setPinErr]=useState("");
   const [view,setView]=useState("pos");
+  // Managers can enter expenses but money figures stay hidden until they unlock
+  // with the owner PIN. Display-only — nothing about the underlying records changes.
+  const [numLock,setNumLock]=useState(true);
+  const moneyMasked = role!=="owner" && numLock;
+  const toggleNumbers=()=>{
+    if(!numLock){ setNumLock(true); return; }              // re-hide needs no PIN
+    const pin=window.prompt("ໃສ່ລະຫັດເຈົ້າຂອງ ເພື່ອເບິ່ງຕົວເລກ\n\nEnter the owner PIN to show the amounts:");
+    if(pin===null) return;
+    if(pin===ROLES.owner.pin) setNumLock(false);
+    else window.alert("ລະຫັດບໍ່ຖືກຕ້ອງ / Wrong PIN");
+  };
+  // Re-hide whenever the user signs out, so the next person starts locked.
+  useEffect(()=>{ setNumLock(true); },[role]);
   const [menu,setMenu]=useState(()=>stor.get("menu",INITIAL_MENU));
   const [categories,setCategories]=useState(()=>stor.get("categories",INITIAL_CATEGORIES));
   const [addons,setAddons]=useState(()=>stor.get("addons",DEFAULT_ADDONS));
@@ -3342,7 +3382,7 @@ export default function App() {
   const notifySale = (r) => {
     if (!stor.get("alertOn", true)) return;
     const netv = r.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0) - (r.discount||0);
-    const text = `${formatKip(netv)}${r.cashier?` · ${r.cashier}`:""}`;
+    const text = `${K(netv)}${r.cashier?` · ${r.cashier}`:""}`;
     setSaleAlert({ text, t: Date.now() });
     playSaleSound();
     try { if ("Notification" in window && Notification.permission === "granted") new Notification("🔔 ຂາຍໃໝ່ / New sale", { body: text, tag: r.id }); } catch {}
@@ -3628,14 +3668,14 @@ export default function App() {
     const row={ id, name:"Staff wages (from 👥)", nameLao:"ຄ່າແຮງພະນັກງານ", type:"fixed", category:"salary", amount, month, deleted:false };
     const u=expenses.some(e=>e.id===id)?expenses.map(e=>e.id===id?row:e):[...expenses,row];
     setExpenses(u); stor.set("expenses",u); pushExpense(row);
-    alert(`✅ ສົ່ງໄປບັນຊີແລ້ວ: ${formatKip(amount)} (${month})\nເບິ່ງໄດ້ທີ່ 📒 ບັນຊີ → ໝວດ 👥 ເງິນເດືອນ\n\nPosted to accounts — see 📒 ບັນຊີ under 👥 ເງິນເດືອນ.`);
+    alert(`✅ ສົ່ງໄປບັນຊີແລ້ວ: ${K(amount)} (${month})\nເບິ່ງໄດ້ທີ່ 📒 ບັນຊີ → ໝວດ 👥 ເງິນເດືອນ\n\nPosted to accounts — see 📒 ບັນຊີ under 👥 ເງິນເດືອນ.`);
   };
   const addSale=(o)=>{
     if(seenSaleIds.current)seenSaleIds.current.add(o.id);
     const u=[...sales,o];setSales(u);stor.set("sales",u);pushOrder(o);
     // Push to OTHER devices (even if their app is closed). Fire-and-forget.
     const net=o.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0)-(o.discount||0);
-    sendSalePush({ title:"🔔 ຂາຍໃໝ່ / New sale", body:`${formatKip(net)}${o.cashier?` · ${o.cashier}`:""}`, fromDeviceId:getDeviceId() });
+    sendSalePush({ title:"🔔 ຂາຍໃໝ່ / New sale", body:`${K(net)}${o.cashier?` · ${o.cashier}`:""}`, fromDeviceId:getDeviceId() });
   };
   const updateSale=(o)=>{ const u=sales.map(s=>s.id===o.id?o:s);setSales(u);stor.set("sales",u);pushOrder(o); };
   const openShift=({cash,notes})=>{ const s={id:genId(),openedAt:new Date().toISOString(),openingCash:cash,cashier:ROLES[role].label,notes};const u=[...shifts,s];setShifts(u);stor.set("shifts",u);pushShift(s);setShiftModal(null); };
@@ -3720,11 +3760,11 @@ export default function App() {
       )}
       {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
       {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
-      {view==="dashboard"&&<DashboardView sales={sales} />}
-      {view==="report"&&<ReportView sales={sales} />}
+      {view==="dashboard"&&<DashboardView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
+      {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
       {view==="staff"&&<StaffView staff={staff} attendance={attendance} staffCfg={staffCfg} expenses={expenses} role={role} onSaveStaff={saveStaffMember} onDeleteStaff={deleteStaffMember} onSetAttendance={setAttendanceEntry} onSaveCfg={saveStaffCfg} onPostWages={postWages} />}
-      {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
+      {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
       {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
     </div>
   );
@@ -3749,11 +3789,11 @@ export default function App() {
         <OfflineBanner />
         {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
         {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} />}
-        {view==="dashboard"&&<DashboardView sales={sales} />}
-      {view==="report"&&<ReportView sales={sales} />}
+        {view==="dashboard"&&<DashboardView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
+      {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
         {view==="staff"&&<StaffView staff={staff} attendance={attendance} staffCfg={staffCfg} expenses={expenses} role={role} onSaveStaff={saveStaffMember} onDeleteStaff={deleteStaffMember} onSetAttendance={setAttendanceEntry} onSaveCfg={saveStaffCfg} onPostWages={postWages} />}
-      {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
+      {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
         {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
       </div>
       <div style={{ position:"fixed",bottom:0,left:0,right:0,height:"calc(64px + env(safe-area-inset-bottom, 0px))",background:"#1a1a2e",display:"flex",alignItems:"flex-start",paddingBottom:"env(safe-area-inset-bottom, 0px)",zIndex:200,borderTop:"1px solid rgba(255,255,255,0.08)",boxSizing:"border-box" }}>
