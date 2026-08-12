@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.12-4";
+const BUILD_VERSION = "2026.08.12-5";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1563,13 +1563,36 @@ function UpdateBanner() {
     try { if (window.caches) { const n = await caches.keys(); await Promise.all(n.map(k => caches.delete(k))); } } catch {}
     window.location.replace((import.meta.env.BASE_URL || "/") + "?v=" + Date.now());
   };
+  return <UpdatePrompt onReload={reload} />;
+}
+
+// Once a new build is found, update on our own if the till is idle. A device left
+// on a broken build is worse than a reload: an unnoticed banner is how a bad build
+// stayed on the tablet through a whole service. An order in progress always wins —
+// the countdown pauses while there is anything in the cart.
+function UpdatePrompt({ onReload }) {
+  const [left, setLeft] = useState(15);
+  const busy = () => {
+    try { return (stor.get("orderDraft", { cart: [] }).cart || []).length > 0; } catch { return false; }
+  };
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (busy()) { setLeft(15); return; }              // mid-order: hold off
+      setLeft(n => { if (n <= 1) { clearInterval(id); onReload(); return 0; } return n - 1; });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [onReload]);
+  const waiting = busy();
   return (
-    <div onClick={reload} style={{
+    <div onClick={onReload} style={{
       position:"sticky", top:0, zIndex:60, width:"100%", background:"#2563eb", color:"#fff",
       fontFamily:"'Noto Sans Lao',sans-serif", fontSize:13, fontWeight:700,
       textAlign:"center", padding:"9px 10px", cursor:"pointer", flexShrink:0,
     }}>
       🔄 ມີເວີຊັນໃໝ່ — ແຕະເພື່ອອັບເດດ / New version available — tap to update
+      <span style={{ fontWeight:400, opacity:0.85 }}>
+        {waiting ? " · ຈະອັບເດດເມື່ອຂາຍແລ້ວ / will update once the cart is clear" : ` · ອັບເດດເອງໃນ ${left} ວິ / auto in ${left}s`}
+      </span>
     </div>
   );
 }
