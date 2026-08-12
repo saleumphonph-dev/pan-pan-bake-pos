@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, syncExpense, syncStaff, syncAttendance, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchStaffSince, fetchAttendanceSince, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, syncExpense, syncStaff, syncAttendance, syncRecipe, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchStaffSince, fetchAttendanceSince, fetchRecipesSince, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
 import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from "./src/lib/push.js";
 
 // ============================================================
@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.12-2";
+const BUILD_VERSION = "2026.08.12-3";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -76,6 +76,60 @@ const EXPENSE_CATS = {
   ],
 };
 const COGS_IDS = ["ingredients", "packaging"];
+
+// ── Recipe costing (owner) ────────────────────────────────────────────
+// Standard food-costing model, kept deliberately separate from sales/menu data.
+//
+//   per ingredient   unitCost = buyPrice ÷ buyQty        (₭ per g / ml / piece)
+//                    lineCost = unitCost × useQty
+//   batch            batchCost = Σ lineCost
+//   per piece        base = batchCost ÷ yield
+//   waste            cogs = base × (1 + waste%)          ← true food cost per piece
+//
+// Fixed cost and profit are percentages OF THE SELLING PRICE (that is how rent,
+// wages and utilities actually behave against revenue, and it matches the P&L),
+// so the price that covers everything is:
+//
+//   price = cogs ÷ (1 − fixed% − profit%)
+//
+// Against a price that is already set, the same figures run the other way:
+//   foodCost% = cogs ÷ price, fixedShare = price × fixed%, profit = the remainder.
+const UNITS = ["g","kg","ml","L","pcs"];
+const COST_CFG_DEFAULT = { fixedPct: 30, profitPct: 20, roundTo: 1000 };
+
+function calcRecipe(recipe, cfg) {
+  const fixedPct  = Math.max(0, Number(cfg?.fixedPct)  || 0);
+  const profitPct = Math.max(0, Number(cfg?.profitPct) || 0);
+  const roundTo   = Math.max(1, Number(cfg?.roundTo)   || 1);
+  const lines = (recipe.ingredients || []).map(g => {
+    const buyQty   = Number(g.buyQty)   || 0;
+    const buyPrice = Number(g.buyPrice) || 0;
+    const useQty   = Number(g.useQty)   || 0;
+    const unitCost = buyQty > 0 ? buyPrice / buyQty : 0;
+    return { ...g, unitCost, lineCost: unitCost * useQty };
+  });
+  const batchCost = lines.reduce((s, l) => s + l.lineCost, 0);
+  const yieldQty  = Math.max(1, Number(recipe.yieldQty) || 1);
+  const wastePct  = Math.max(0, Number(recipe.wastePct) || 0);
+  const base      = batchCost / yieldQty;
+  const cogs      = base * (1 + wastePct / 100);
+
+  // A price can only be derived while fixed% + profit% leaves something over.
+  const room  = 1 - (fixedPct + profitPct) / 100;
+  const canPrice = room > 0.01;
+  const rawPrice = canPrice ? cogs / room : 0;
+  const suggested = canPrice ? Math.ceil(rawPrice / roundTo) * roundTo : 0;
+
+  // Check panel against whatever price is actually charged.
+  const price = Number(recipe.price) || 0;
+  const foodCostPct = price > 0 ? (cogs / price) * 100 : 0;
+  const fixedShare  = price * (fixedPct / 100);
+  const profitAmt   = price - cogs - fixedShare;
+  const profitPctAct= price > 0 ? (profitAmt / price) * 100 : 0;
+
+  return { lines, batchCost, yieldQty, wastePct, base, cogs, canPrice, rawPrice, suggested,
+           price, foodCostPct, fixedShare, profitAmt, profitPctAct, fixedPct, profitPct };
+}
 
 // ── Hidden amounts (manager view) ─────────────────────────────────────
 // Money figures are replaced with dots until the owner PIN is entered. This is
@@ -1792,6 +1846,187 @@ function DashboardView({ sales, masked, onToggleNumbers }) {
 }
 
 // ============================================================
+// RECIPE COSTING — work out COGS and a selling price (owner only)
+// ============================================================
+function RecipeView({ recipes, menu, costCfg, onSaveRecipe, onDeleteRecipe, onSaveCfg }) {
+  const blank={ name:"",nameLao:"",menuItemId:"",yieldQty:1,wastePct:0,price:"",note:"",
+                ingredients:[{name:"",unit:"g",buyQty:"",buyPrice:"",useQty:""}] };
+  const [edit,setEdit]=useState(null);
+  const list=recipes.filter(r=>!r.deleted).sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  const cfg={ ...COST_CFG_DEFAULT, ...(costCfg||{}) };
+
+  const inp={ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,boxSizing:"border-box" };
+  const card={ background:"#fff",borderRadius:12,padding:18,border:"1px solid #e5e7eb",marginBottom:16 };
+  const lbl={ fontSize:11,color:"#6b7280",marginBottom:4 };
+
+  const calc=edit?calcRecipe(edit,cfg):null;
+  const setIng=(i,patch)=>setEdit(e=>({ ...e, ingredients:e.ingredients.map((g,n)=>n===i?{...g,...patch}:g) }));
+  const addIng=()=>setEdit(e=>({ ...e, ingredients:[...e.ingredients,{name:"",unit:"g",buyQty:"",buyPrice:"",useQty:""}] }));
+  const delIng=(i)=>setEdit(e=>({ ...e, ingredients:e.ingredients.filter((_,n)=>n!==i) }));
+  const save=()=>{
+    if(!edit.name){alert("ໃສ່ຊື່ສູດ / Give the recipe a name");return;}
+    onSaveRecipe({ ...edit, id:edit.id||genId(),
+      yieldQty:Number(edit.yieldQty)||1, wastePct:Number(edit.wastePct)||0,
+      price:edit.price===""?null:Number(edit.price)||0,
+      ingredients:edit.ingredients.filter(g=>g.name||g.buyQty||g.useQty) });
+    setEdit(null);
+  };
+  // Linking to a menu item just borrows its current selling price for the check.
+  const pickMenu=(id)=>{
+    const m=menu.find(x=>String(x.id)===String(id));
+    setEdit(e=>({ ...e, menuItemId:id, price:m?String(m.price):e.price, name:e.name||(m?m.name:""), nameLao:e.nameLao||(m?m.nameLao:"") }));
+  };
+
+  return (
+    <div style={{ padding:"20px 24px",fontFamily:"'Noto Sans Lao',sans-serif",background:"#f0ece4",minHeight:"100vh" }}>
+      <h1 style={{ margin:"0 0 4px",fontSize:22,fontWeight:700 }}>🧮 ຕົ້ນທຶນເມນູ</h1>
+      <div style={{ fontSize:13,color:"#6b7280",marginBottom:16 }}>Recipe costing — work out COGS and a selling price. ບໍ່ກ່ຽວກັບຍອດຂາຍ / separate from sales.</div>
+
+      {/* Global assumptions */}
+      <div style={{ ...card,display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end" }}>
+        <div style={{ flex:"1 1 130px" }}>
+          <div style={lbl}>ຕົ້ນທຶນຄົງທີ່ / Fixed cost (% ຂອງລາຄາຂາຍ)</div>
+          <input type="number" min="0" max="99" value={cfg.fixedPct} onChange={e=>onSaveCfg({...cfg,fixedPct:Number(e.target.value)||0})} style={inp} />
+        </div>
+        <div style={{ flex:"1 1 130px" }}>
+          <div style={lbl}>ກຳໄລເປົ້າໝາຍ / Target profit (%)</div>
+          <input type="number" min="0" max="99" value={cfg.profitPct} onChange={e=>onSaveCfg({...cfg,profitPct:Number(e.target.value)||0})} style={inp} />
+        </div>
+        <div style={{ flex:"1 1 120px" }}>
+          <div style={lbl}>ປັດຂຶ້ນເປັນ / Round up to (₭)</div>
+          <input type="number" min="1" value={cfg.roundTo} onChange={e=>onSaveCfg({...cfg,roundTo:Number(e.target.value)||1})} style={inp} />
+        </div>
+        <div style={{ flex:"2 1 260px",fontSize:11,color:"#6b7280",lineHeight:1.6 }}>
+          ລາຄາແນະນຳ = ຕົ້ນທຶນວັດຖຸດິບ ÷ (100% − {cfg.fixedPct}% − {cfg.profitPct}%)<br/>
+          Suggested price = COGS ÷ (100% − fixed% − profit%). Fixed cost covers rent, wages and utilities as a share of sales.
+        </div>
+      </div>
+
+      {!edit && (
+        <>
+          <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8 }}>
+            <div style={{ fontSize:15,fontWeight:700 }}>ສູດທີ່ບັນທຶກໄວ້ / Saved recipes ({list.length})</div>
+            <button onClick={()=>setEdit({...blank})} style={{ padding:"10px 18px",background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>+ ສ້າງສູດໃໝ່</button>
+          </div>
+          {list.length===0 && <div style={{ ...card,textAlign:"center",color:"#9ca3af",fontSize:13 }}>ຍັງບໍ່ມີສູດ — ກົດ “ສ້າງສູດໃໝ່”<br/>No recipes yet — start with one item and add its ingredients.</div>}
+          {list.map(r=>{
+            const c=calcRecipe(r,cfg);
+            const ok=c.price>0 && c.profitAmt>0;
+            return (
+              <div key={r.id} onClick={()=>setEdit({ ...r, price:r.price==null?"":String(r.price), ingredients:r.ingredients.length?r.ingredients:blank.ingredients })}
+                style={{ ...card,marginBottom:10,padding:14,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap" }}>
+                <div style={{ minWidth:160 }}>
+                  <div style={{ fontSize:14,fontWeight:700 }}>{r.name}{r.nameLao?<span style={{ fontWeight:400,color:"#6b7280" }}> · {r.nameLao}</span>:null}</div>
+                  <div style={{ fontSize:11,color:"#9ca3af" }}>{(r.ingredients||[]).length} ວັດຖຸດິບ · ໄດ້ {r.yieldQty} ຊິ້ນ/batch</div>
+                </div>
+                <div style={{ display:"flex",gap:16,flexWrap:"wrap",alignItems:"center" }}>
+                  <div><div style={lbl}>ຕົ້ນທຶນ/ຊິ້ນ</div><div style={{ fontWeight:700,color:"#dc2626" }}>{formatKip(Math.round(c.cogs))}</div></div>
+                  <div><div style={lbl}>ແນະນຳ</div><div style={{ fontWeight:700,color:"#7c3aed" }}>{c.canPrice?formatKip(c.suggested):"—"}</div></div>
+                  <div><div style={lbl}>ຂາຍຈິງ</div><div style={{ fontWeight:700 }}>{c.price>0?formatKip(c.price):"—"}</div></div>
+                  {c.price>0&&(
+                    <div style={{ padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:700,background:ok?"#dcfce7":"#fee2e2",color:ok?"#16a34a":"#dc2626",whiteSpace:"nowrap" }}>
+                      {ok?"✓":"⚠"} ກຳໄລ {c.profitPctAct.toFixed(0)}%
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {edit && (
+        <>
+          <div style={card}>
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8 }}>
+              <div style={{ fontSize:15,fontWeight:700 }}>{edit.id?"ແກ້ໄຂສູດ / Edit recipe":"ສູດໃໝ່ / New recipe"}</div>
+              <button onClick={()=>setEdit(null)} style={{ padding:"6px 12px",borderRadius:8,border:"1px solid #e5e7eb",background:"#fff",cursor:"pointer",fontSize:12 }}>✕ ປິດ</button>
+            </div>
+            <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10 }}>
+              <div><div style={lbl}>ຊື່ສູດ / Name *</div><input value={edit.name} onChange={e=>setEdit({...edit,name:e.target.value})} style={inp} /></div>
+              <div><div style={lbl}>ຊື່ລາວ / Lao name</div><input value={edit.nameLao} onChange={e=>setEdit({...edit,nameLao:e.target.value})} style={inp} /></div>
+              <div><div style={lbl}>ເຊື່ອມກັບເມນູ / Link to menu</div>
+                <select value={edit.menuItemId||""} onChange={e=>pickMenu(e.target.value)} style={inp}>
+                  <option value="">— ບໍ່ເຊື່ອມ / none —</option>
+                  {menu.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+                </select></div>
+              <div><div style={lbl}>ໄດ້ຈຳນວນ / Yield (ຊິ້ນ per batch)</div><input type="number" min="1" value={edit.yieldQty} onChange={e=>setEdit({...edit,yieldQty:e.target.value})} style={inp} /></div>
+              <div><div style={lbl}>ເສຍຫາຍ / Waste (%)</div><input type="number" min="0" value={edit.wastePct} onChange={e=>setEdit({...edit,wastePct:e.target.value})} style={inp} /></div>
+              <div><div style={lbl}>ລາຄາຂາຍຈິງ / Selling price (₭)</div><input type="number" min="0" value={edit.price} onChange={e=>setEdit({...edit,price:e.target.value})} style={inp} /></div>
+            </div>
+          </div>
+
+          {/* Ingredients */}
+          <div style={{ ...card,padding:0,overflow:"hidden" }}>
+            <div style={{ padding:"14px 18px",fontSize:15,fontWeight:700,borderBottom:"1px solid #f3f4f6" }}>🥣 ວັດຖຸດິບ / Ingredients</div>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:720 }}>
+                <thead><tr style={{ background:"#f9fafb" }}>
+                  {["ວັດຖຸດິບ / Item","ຫົວໜ່ວຍ","ຊື້ຈຳນວນ / Buy qty","ລາຄາຊື້ / Buy price","ລາຄາ/ຫົວໜ່ວຍ","ໃຊ້ / Used","ຕົ້ນທຶນ / Cost",""].map((h,i)=>(
+                    <th key={h+i} style={{ padding:"8px 10px",textAlign:i>=2&&i<=6?"right":"left",fontWeight:700,borderBottom:"1px solid #e5e7eb",whiteSpace:"nowrap" }}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {edit.ingredients.map((g,i)=>{
+                    const l=calc.lines[i]||{unitCost:0,lineCost:0};
+                    return (
+                      <tr key={i} style={{ borderBottom:"1px solid #f3f4f6" }}>
+                        <td style={{ padding:"6px 10px",minWidth:150 }}><input value={g.name} onChange={e=>setIng(i,{name:e.target.value})} placeholder="ເຊັ່ນ ແປ້ງ / Flour" style={inp} /></td>
+                        <td style={{ padding:"6px 10px" }}>
+                          <select value={g.unit} onChange={e=>setIng(i,{unit:e.target.value})} style={{ ...inp,width:74 }}>{UNITS.map(u=><option key={u} value={u}>{u}</option>)}</select>
+                        </td>
+                        <td style={{ padding:"6px 10px" }}><input type="number" min="0" value={g.buyQty} onChange={e=>setIng(i,{buyQty:e.target.value})} placeholder="1000" style={{ ...inp,width:100,textAlign:"right" }} /></td>
+                        <td style={{ padding:"6px 10px" }}><input type="number" min="0" value={g.buyPrice} onChange={e=>setIng(i,{buyPrice:e.target.value})} placeholder="25000" style={{ ...inp,width:110,textAlign:"right" }} /></td>
+                        <td style={{ padding:"6px 10px",textAlign:"right",color:"#6b7280",whiteSpace:"nowrap" }}>{l.unitCost?l.unitCost.toLocaleString(undefined,{maximumFractionDigits:2}):"—"} ₭/{g.unit}</td>
+                        <td style={{ padding:"6px 10px" }}><input type="number" min="0" value={g.useQty} onChange={e=>setIng(i,{useQty:e.target.value})} placeholder="120" style={{ ...inp,width:90,textAlign:"right" }} /></td>
+                        <td style={{ padding:"6px 10px",textAlign:"right",fontWeight:700,whiteSpace:"nowrap" }}>{formatKip(Math.round(l.lineCost))}</td>
+                        <td style={{ padding:"6px 10px" }}><button onClick={()=>delIng(i)} style={{ padding:"5px 9px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>✕</button></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot><tr style={{ background:"#f9fafb" }}>
+                  <td colSpan={6} style={{ padding:"10px",fontWeight:700 }}>ລວມຕໍ່ batch / Batch total</td>
+                  <td style={{ padding:"10px",textAlign:"right",fontWeight:700,whiteSpace:"nowrap" }}>{formatKip(Math.round(calc.batchCost))}</td><td/>
+                </tr></tfoot>
+              </table>
+            </div>
+            <div style={{ padding:"12px 18px" }}>
+              <button onClick={addIng} style={{ padding:"9px 16px",borderRadius:8,border:"1px dashed #d1d5db",background:"#fff",cursor:"pointer",fontSize:13,fontWeight:600 }}>+ ເພີ່ມວັດຖຸດິບ / Add ingredient</button>
+            </div>
+          </div>
+
+          {/* Result */}
+          <div style={{ ...card,background:"#1a1a2e",color:"#fff",border:"none" }}>
+            <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:14 }}>
+              {[
+                ["ຕົ້ນທຶນ/ຊິ້ນ / COGS each", formatKip(Math.round(calc.cogs)), "#fca5a5"],
+                ["ລາຄາແນະນຳ / Suggested", calc.canPrice?formatKip(calc.suggested):"⚠ %ສູງເກີນ", "#f4d03f"],
+                ["ລາຄາຂາຍຈິງ / Actual", calc.price>0?formatKip(calc.price):"—", "#fff"],
+                ["ຕົ້ນທຶນວັດຖຸດິບ / Food cost %", calc.price>0?calc.foodCostPct.toFixed(1)+"%":"—", calc.foodCostPct>0&&calc.foodCostPct<=40?"#86efac":"#fca5a5"],
+                ["ກຳໄລ/ຊິ້ນ / Profit each", calc.price>0?formatKip(Math.round(calc.profitAmt)):"—", calc.profitAmt>0?"#86efac":"#fca5a5"],
+              ].map(([l,v,c])=>(
+                <div key={l}><div style={{ fontSize:11,opacity:0.7,marginBottom:4 }}>{l}</div><div style={{ fontSize:18,fontWeight:700,color:c }}>{v}</div></div>
+              ))}
+            </div>
+            <div style={{ marginTop:14,paddingTop:12,borderTop:"1px solid rgba(255,255,255,0.15)",fontSize:11,opacity:0.75,lineHeight:1.7 }}>
+              {formatKip(Math.round(calc.batchCost))} ÷ {calc.yieldQty} ຊິ້ນ{calc.wastePct>0?` + ເສຍຫາຍ ${calc.wastePct}%`:""} = <b>{formatKip(Math.round(calc.cogs))}</b>/ຊິ້ນ
+              {calc.canPrice&&<> · ÷ (100% − {calc.fixedPct}% − {calc.profitPct}%) = {formatKip(Math.round(calc.rawPrice))} → ປັດເປັນ <b>{formatKip(calc.suggested)}</b></>}
+              {calc.price>0&&<><br/>ຂາຍ {formatKip(calc.price)} − ວັດຖຸດິບ {formatKip(Math.round(calc.cogs))} − ຄົງທີ່ {formatKip(Math.round(calc.fixedShare))} = ກຳໄລ <b>{formatKip(Math.round(calc.profitAmt))}</b> ({calc.profitPctAct.toFixed(1)}%)</>}
+            </div>
+          </div>
+
+          <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+            <button onClick={save} style={{ flex:1,minWidth:160,padding:14,background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14 }}>💾 ບັນທຶກສູດ / Save recipe</button>
+            {edit.id&&<button onClick={()=>{ if(window.confirm(`ລຶບສູດ “${edit.name}”?\n\nDelete this recipe?`)){ onDeleteRecipe(edit.id); setEdit(null); } }} style={{ padding:"14px 20px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fecaca",borderRadius:10,fontWeight:700,cursor:"pointer" }}>🗑️ ລຶບ</button>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // STAFF — attendance & wages (manager + owner)
 // ============================================================
 /** Overtime inputs shown when a day is marked ⏱️ OT. Hours are recorded for the
@@ -3352,6 +3587,7 @@ const NAV=[
   {id:"report",label:"ລາຍງານ",icon:"📈",roles:["manager","owner"]},
   {id:"history",label:"ປະຫວັດ",icon:"🧾",roles:["manager","owner"]},
   {id:"staff",label:"ພະນັກງານ",icon:"👥",roles:["manager","owner"]},
+  {id:"recipe",label:"ຕົ້ນທຶນ",icon:"🧮",roles:["owner"]},
   {id:"accounting",label:"ບັນຊີ",icon:"📒",roles:["manager","owner"]},
   {id:"admin",label:"ຈັດການ",icon:"⚙️",roles:["manager","owner"]},
 ];
@@ -3387,6 +3623,8 @@ export default function App() {
   const [staff,setStaff]=useState(()=>stor.get("staff",[]));
   const [attendance,setAttendance]=useState(()=>stor.get("attendance",[]));
   const [staffCfg,setStaffCfg]=useState(()=>stor.get("staffCfg",STAFF_CFG_DEFAULT));
+  const [recipes,setRecipes]=useState(()=>stor.get("recipes",[]));
+  const [costCfg,setCostCfg]=useState(()=>stor.get("costCfg",COST_CFG_DEFAULT));
   const [qrImage,setQrImage]=useState(()=>stor.get("qrImage",""));
   const [shopInfo,setShopInfo]=useState(()=>stor.get("shopInfo",DEFAULT_SHOP_INFO));
   const [parkedOrders,setParkedOrders]=useState(()=>stor.get("parked",[]));
@@ -3522,7 +3760,7 @@ export default function App() {
       if (purgeMs) arr = arr.filter(r => new Date(r[tsField]).getTime() >= purgeMs); // drop reset rows
       return arr;
     };
-    const SETTING_KEYS = { menu: setMenu, categories: setCategories, addons: setAddons, shopInfo: setShopInfo, staffCfg: setStaffCfg };
+    const SETTING_KEYS = { menu: setMenu, categories: setCategories, addons: setAddons, shopInfo: setShopInfo, staffCfg: setStaffCfg, costCfg: setCostCfg };
     // Two-step settings sync: read the tiny timestamp list first, then download only
     // the keys that actually changed. (The menu blob holds the photos and can be
     // megabytes — pulling it every 30s on every device was slow and burned egress.)
@@ -3577,7 +3815,8 @@ export default function App() {
       const expSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("expensesCursor", EPOCH)) - OVERLAP).toISOString();
       const stfSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("staffCursor", EPOCH)) - OVERLAP).toISOString();
       const attSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("attendanceCursor", EPOCH)) - OVERLAP).toISOString();
-      const [cs, cf, ce, cst, cat, cmeta] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchExpensesSince(expSince), fetchStaffSince(stfSince), fetchAttendanceSince(attSince), fetchSettingsMeta()]);
+      const recSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("recipesCursor", EPOCH)) - OVERLAP).toISOString();
+      const [cs, cf, ce, cst, cat, crc, cmeta] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchExpensesSince(expSince), fetchStaffSince(stfSince), fetchAttendanceSince(attSince), fetchRecipesSince(recSince), fetchSettingsMeta()]);
       if (cancelled) return;
       let purgedAt = stor.get("dataPurgedAt", null);
       // dataPurgedAt is a tiny value, but it still only needs fetching when it moves.
@@ -3636,6 +3875,12 @@ export default function App() {
         if (cat.cursor) stor.set("attendanceCursor", cat.cursor);
         if (fullReconcile) { const ids = new Set(cat.rows.map(r => r.id)); merged.forEach(a => { if (!ids.has(a.id)) syncAttendance(a); }); }
       }
+      if (crc) {
+        const merged = mergeChanges(stor.get("recipes", []), crc.rows, null, 0);
+        stor.set("recipes", merged); setRecipes(merged);
+        if (crc.cursor) stor.set("recipesCursor", crc.cursor);
+        if (fullReconcile) { const ids = new Set(crc.rows.map(r => r.id)); merged.forEach(r => { if (!ids.has(r.id)) syncRecipe(r); }); }
+      }
       if (cmeta) {
         await syncSettings(cmeta);
         // Compare instants, not strings: our own pushes store a client ISO stamp
@@ -3648,6 +3893,7 @@ export default function App() {
       retryPending("pendingExpenses", "expenses", syncExpense);
       retryPending("pendingStaff", "staff", syncStaff);
       retryPending("pendingAttendance", "attendance", syncAttendance);
+      retryPending("pendingRecipes", "recipes", syncRecipe);
     };
     sync(); // immediate on login
     const id = setInterval(sync, 30000); // every 30s (was 10s — big egress cut)
@@ -3682,6 +3928,10 @@ export default function App() {
     setAttendance(u); stor.set("attendance",u); pushAtt(row);
   };
   const saveStaffCfg=(c)=>{ setStaffCfg(c); pushSetting("staffCfg",c); };
+  const pushRecipe=(r)=>{ syncRecipe(r).then(ok=>markPending("pendingRecipes",r.id,ok)).catch(()=>markPending("pendingRecipes",r.id,false)); };
+  const saveRecipe=(r)=>{ const u=recipes.some(x=>x.id===r.id)?recipes.map(x=>x.id===r.id?r:x):[...recipes,r]; setRecipes(u); stor.set("recipes",u); pushRecipe(r); };
+  const deleteRecipe=(id)=>{ const row=recipes.find(x=>x.id===id); if(!row)return; const t={...row,deleted:true}; const u=recipes.map(x=>x.id===id?t:x); setRecipes(u); stor.set("recipes",u); pushRecipe(t); };
+  const saveCostCfg=(c)=>{ setCostCfg(c); pushSetting("costCfg",c); };
   // The ONLY place staff data touches the books: one expense row per month, with a
   // fixed id so re-posting updates it instead of stacking duplicates.
   const postWages=(month,amount)=>{
@@ -3785,6 +4035,7 @@ export default function App() {
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
       {view==="staff"&&<StaffView staff={staff} attendance={attendance} staffCfg={staffCfg} expenses={expenses} role={role} onSaveStaff={saveStaffMember} onDeleteStaff={deleteStaffMember} onSetAttendance={setAttendanceEntry} onSaveCfg={saveStaffCfg} onPostWages={postWages} />}
+      {view==="recipe"&&<RecipeView recipes={recipes} menu={menu} costCfg={costCfg} onSaveRecipe={saveRecipe} onDeleteRecipe={deleteRecipe} onSaveCfg={saveCostCfg} />}
       {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
       {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
     </div>
@@ -3814,6 +4065,7 @@ export default function App() {
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
         {view==="staff"&&<StaffView staff={staff} attendance={attendance} staffCfg={staffCfg} expenses={expenses} role={role} onSaveStaff={saveStaffMember} onDeleteStaff={deleteStaffMember} onSetAttendance={setAttendanceEntry} onSaveCfg={saveStaffCfg} onPostWages={postWages} />}
+      {view==="recipe"&&<RecipeView recipes={recipes} menu={menu} costCfg={costCfg} onSaveRecipe={saveRecipe} onDeleteRecipe={deleteRecipe} onSaveCfg={saveCostCfg} />}
       {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
         {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
       </div>

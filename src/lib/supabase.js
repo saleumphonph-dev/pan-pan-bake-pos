@@ -88,7 +88,7 @@ async function fetchChangedRows(table, since) {
   // (migration pending), fall back to the creation-date column so NEW rows still
   // sync incrementally and cheaply; voids/edits catch up once updated_at exists.
   let res = await runOn("updated_at");
-  if (res.error) res = await runOn(table === "shifts" ? "opened_at" : (table === "expenses" || table === "staff" || table === "attendance") ? "created_at" : "date");
+  if (res.error) res = await runOn(table === "shifts" ? "opened_at" : (table === "expenses" || table === "staff" || table === "attendance" || table === "recipes") ? "created_at" : "date");
   if (res.error) return null;
   return { rows: res.rows, cursor: res.cursor };
 }
@@ -162,6 +162,51 @@ export async function fetchExpensesSince(since) {
       date:     r.exp_date || null,
       supplier: r.supplier || null,
       createdAt: r.created_at,
+    })),
+  };
+}
+
+/** Upsert one recipe (menu costing). Returns true on success. Deletes are soft. */
+export async function syncRecipe(r) {
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase.from("recipes").upsert({
+      id:           r.id,
+      name:         r.name     ?? null,
+      name_lao:     r.nameLao  ?? null,
+      menu_item_id: r.menuItemId == null ? null : String(r.menuItemId),
+      yield_qty:    r.yieldQty ?? 1,
+      waste_pct:    r.wastePct ?? 0,
+      ingredients:  r.ingredients ?? [],
+      price:        r.price ?? null,
+      note:         r.note ?? null,
+      deleted:      r.deleted ?? false,
+      updated_at:   new Date().toISOString(),
+    });
+    return !error;
+  } catch (e) {
+    console.warn("[Supabase] syncRecipe failed:", e.message);
+    return false;
+  }
+}
+
+/** Incremental recipes fetch. Returns { rows, cursor } or null. */
+export async function fetchRecipesSince(since) {
+  const res = await fetchChangedRows("recipes", since);
+  if (res == null) return null;
+  return {
+    cursor: res.cursor,
+    rows: res.rows.map(r => ({
+      id:          r.id,
+      name:        r.name,
+      nameLao:     r.name_lao,
+      menuItemId:  r.menu_item_id,
+      yieldQty:    Number(r.yield_qty) || 1,
+      wastePct:    Number(r.waste_pct) || 0,
+      ingredients: Array.isArray(r.ingredients) ? r.ingredients : [],
+      price:       r.price == null ? null : Number(r.price),
+      note:        r.note,
+      deleted:     r.deleted ?? false,
     })),
   };
 }
