@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.09-2";
+const BUILD_VERSION = "2026.08.12-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -2159,7 +2159,8 @@ function StaffView({ staff, attendance, staffCfg, expenses, role, onSaveStaff, o
 // ============================================================
 function AccountingView({ sales, expenses, masked, onToggleNumbers, onAddExpense, onDeleteExpense }) {
   const K = (v) => maskKip(masked, v);
-  const [form,setForm]=useState({name:"",nameLao:"",type:"variable",category:"ingredients",amount:"",month:new Date().toISOString().slice(0,7)});
+  const today=new Date().toISOString().slice(0,10);
+  const [form,setForm]=useState({name:"",nameLao:"",supplier:"",type:"variable",category:"ingredients",amount:"",date:today,month:today.slice(0,7)});
   const [sel,setSel]=useState(new Date().toISOString().slice(0,7));
   const allCats=[...EXPENSE_CATS.fixed,...EXPENSE_CATS.variable];
 
@@ -2168,7 +2169,7 @@ function AccountingView({ sales, expenses, masked, onToggleNumbers, onAddExpense
     if(!valid)setForm(f=>({...f,category:EXPENSE_CATS[f.type][0].id}));
   },[form.type]);
 
-  const saveExp=()=>{ if(!form.name||!form.amount)return; onAddExpense({id:genId(),...form,amount:Number(form.amount)}); setForm({...form,name:"",nameLao:"",amount:""}); };
+  const saveExp=()=>{ if(!form.name||!form.amount)return; onAddExpense({id:genId(),...form,amount:Number(form.amount)}); setForm({...form,name:"",nameLao:"",supplier:"",amount:""}); };
   const delExp=(id)=>{ if(!window.confirm("ລຶບລາຍຈ່າຍນີ້? / Delete this expense?"))return; onDeleteExpense(id); };
 
   const orderNet = (o) => o.items.reduce((s,i)=>s+itemPrice(i)*i.qty,0) - (o.discount||0);
@@ -2176,7 +2177,8 @@ function AccountingView({ sales, expenses, masked, onToggleNumbers, onAddExpense
   const revenue=monthSales.reduce((s,o)=>s+orderNet(o),0);
   // Deleted expenses are kept as hidden tombstones so the delete propagates to
   // other devices instead of the row reappearing on the next sync.
-  const monthExp=expenses.filter(e=>e.month===sel&&!e.deleted);
+  const monthExp=expenses.filter(e=>e.month===sel&&!e.deleted)
+    .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
   const cogs=monthExp.filter(e=>COGS_IDS.includes(e.category)).reduce((s,e)=>s+e.amount,0);
   const grossProfit=revenue-cogs;
   const fixedTotal=monthExp.filter(e=>e.type==="fixed").reduce((s,e)=>s+e.amount,0);
@@ -2229,15 +2231,23 @@ function AccountingView({ sales, expenses, masked, onToggleNumbers, onAddExpense
               {EXPENSE_CATS[form.type].map(c=><option key={c.id} value={c.id}>{c.label}</option>)}
             </select>
           </div>
-          {[["ຊື່ (EN)","name","text"],["ຊື່ (ລາວ)","nameLao","text"],["ຈຳນວນ (₭)","amount","number"]].map(([l,k,t])=>(
+          {[["ຊື່ (EN)","name","text"],["ຊື່ (ລາວ)","nameLao","text"],["🏪 ຜູ້ສະໜອງ / Supplier","supplier","text"],["ຈຳນວນ (₭)","amount","number"]].map(([l,k,t])=>(
             <div key={k} style={{ marginBottom:10 }}>
               <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>{l}</div>
               <input type={t} value={form[k]} onChange={e=>setForm({...form,[k]:e.target.value})} style={inpStyle} />
             </div>
           ))}
-          <div style={{ marginBottom:12 }}>
-            <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ເດືອນ</div>
-            <input type="month" value={form.month} onChange={e=>setForm({...form,month:e.target.value})} style={inpStyle} />
+          <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12 }}>
+            <div>
+              <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>📅 ວັນທີ / Date</div>
+              {/* Changing the date moves the month with it; the month can still be
+                  overridden afterwards for an invoice booked to another month. */}
+              <input type="date" value={form.date} onChange={e=>setForm({...form,date:e.target.value,month:(e.target.value||"").slice(0,7)||form.month})} style={inpStyle} />
+            </div>
+            <div>
+              <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ເດືອນ / Month</div>
+              <input type="month" value={form.month} onChange={e=>setForm({...form,month:e.target.value})} style={inpStyle} />
+            </div>
           </div>
           <button onClick={saveExp} style={{ width:"100%",padding:10,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>ບັນທຶກ</button>
         </div>
@@ -2274,7 +2284,11 @@ function AccountingView({ sales, expenses, masked, onToggleNumbers, onAddExpense
               <div key={e.id} style={{ display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:"1px solid #f3f4f6" }}>
                 <span style={{ fontSize:10,padding:"2px 6px",borderRadius:4,background:e.type==="fixed"?"#ede9fe":"#fef3c7",color:e.type==="fixed"?"#7c3aed":"#d97706" }}>{e.type==="fixed"?"ຄົງ":"ແປ"}</span>
                 <span style={{ fontSize:11,color:"#6b7280",minWidth:80 }}>{cat?.label}</span>
-                <div style={{ flex:1 }}><div style={{ fontSize:13,fontWeight:600 }}>{e.name}</div>{e.nameLao&&<div style={{ fontSize:11,color:"#6b7280" }}>{e.nameLao}</div>}</div>
+                <span style={{ fontSize:11,color:"#9ca3af",minWidth:52,whiteSpace:"nowrap" }}>{e.date?fmtDate(e.date):"—"}</span>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:13,fontWeight:600 }}>{e.name}</div>
+                  {(e.nameLao||e.supplier)&&<div style={{ fontSize:11,color:"#6b7280" }}>{e.nameLao}{e.nameLao&&e.supplier?" · ":""}{e.supplier?`🏪 ${e.supplier}`:""}</div>}
+                </div>
                 <span style={{ fontSize:13,fontWeight:700,color:"#dc2626" }}>{K(e.amount)}</span>
                 <button onClick={()=>delExp(e.id)} style={{ padding:"4px 8px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>✕</button>
               </div>

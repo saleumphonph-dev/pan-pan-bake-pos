@@ -132,6 +132,8 @@ export async function syncExpense(exp) {
       category:   exp.category ?? null,
       amount:     exp.amount   ?? 0,
       month:      exp.month    ?? null,
+      exp_date:   exp.date     ?? null,
+      supplier:   exp.supplier ?? null,
       deleted:    exp.deleted  ?? false,
       updated_at: new Date().toISOString(),
     });
@@ -157,7 +159,9 @@ export async function fetchExpensesSince(since) {
       amount:   Number(r.amount) || 0,
       month:    r.month,
       deleted:  r.deleted ?? false,
-      date:     r.created_at,
+      date:     r.exp_date || null,
+      supplier: r.supplier || null,
+      createdAt: r.created_at,
     })),
   };
 }
