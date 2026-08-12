@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.12-6";
+const BUILD_VERSION = "2026.08.13-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1881,6 +1881,42 @@ function DashboardView({ sales, masked, onToggleNumbers }) {
 // ============================================================
 // RECIPE COSTING — work out COGS and a selling price (owner only)
 // ============================================================
+/** One recipe as an A4 sheet. `withCosts` off gives the kitchen copy: the same
+ *  ingredients and method with every price removed, so an SOP can be posted on
+ *  the wall without publishing the food cost. */
+function printRecipe(recipe, calc, cfg, withCosts) {
+  const esc = (s) => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const rows = (recipe.ingredients || []).filter(g => g.name || g.useQty).map((g, i) => {
+    const l = calc.lines[i] || { unitCost: 0, lineCost: 0 };
+    return `<tr>
+      <td>${esc(g.name || "—")}</td>
+      <td class="num">${esc(g.useQty || "—")} ${esc(g.unit || "")}</td>
+      ${withCosts ? `<td class="num">${esc(g.buyQty)} ${esc(g.unit)} @ ${formatKip(Number(g.buyPrice) || 0)}</td>
+      <td class="num">${formatKip(Math.round(l.lineCost))}</td>` : ""}
+    </tr>`;
+  }).join("");
+  const method = String(recipe.note || "").trim();
+  printReport(`
+    <h1>${esc(recipe.name || "—")}${recipe.nameLao ? ` <span style="color:#666;font-weight:400">· ${esc(recipe.nameLao)}</span>` : ""}</h1>
+    <div class="sub">ສູດ & ວິທີເຮັດ / Recipe &amp; method · ໄດ້ ${calc.yieldQty} ຊິ້ນ ຕໍ່ 1 batch · ພິມ ${new Date().toLocaleDateString("en-GB")}</div>
+    ${withCosts ? `<div class="cards">
+      <div class="card"><div class="k">ຕົ້ນທຶນ/ຊິ້ນ / COGS each</div><div class="v">${formatKip(Math.round(calc.cogs))}</div></div>
+      <div class="card"><div class="k">ລາຄາແນະນຳ / Suggested</div><div class="v">${calc.canPrice ? formatKip(calc.suggested) : "—"}</div></div>
+      <div class="card"><div class="k">ລາຄາຂາຍ / Price</div><div class="v">${calc.price > 0 ? formatKip(calc.price) : "—"}</div></div>
+      <div class="card"><div class="k">ວັດຖຸດິບ % / Food cost</div><div class="v">${calc.price > 0 ? calc.foodCostPct.toFixed(1) + "%" : "—"}</div></div>
+    </div>` : ""}
+    <table>
+      <thead><tr><th>ວັດຖຸດິບ / Ingredient</th><th class="num">ໃຊ້ / Use</th>
+      ${withCosts ? `<th class="num">ຊື້ / Buy</th><th class="num">ຕົ້ນທຶນ / Cost</th>` : ""}</tr></thead>
+      <tbody>${rows || `<tr><td colspan="${withCosts ? 4 : 2}">—</td></tr>`}</tbody>
+      ${withCosts ? `<tfoot><tr><th colspan="3">ລວມຕໍ່ batch / Batch total</th><th class="num">${formatKip(Math.round(calc.batchCost))}</th></tr></tfoot>` : ""}
+    </table>
+    <h1 style="font-size:16px;margin:18px 0 6px">📝 ວິທີເຮັດ / Method</h1>
+    <div style="white-space:pre-wrap;line-height:1.9;font-size:13px;border:1px solid #ccc;border-radius:8px;padding:12px;min-height:120px">${esc(method) || "—"}</div>
+    ${withCosts && calc.wastePct > 0 ? `<div class="sub" style="margin-top:12px">ລວມເສຍຫາຍ ${calc.wastePct}% ໃນຕົ້ນທຶນ / includes ${calc.wastePct}% waste allowance</div>` : ""}
+  `);
+}
+
 function RecipeView({ recipes, menu, costCfg, onSaveRecipe, onDeleteRecipe, onSaveCfg }) {
   const blank={ name:"",nameLao:"",menuItemId:"",yieldQty:1,wastePct:0,price:"",note:"",
                 ingredients:[{name:"",unit:"g",buyQty:"",buyPrice:"",useQty:""}] };
@@ -1987,6 +2023,12 @@ function RecipeView({ recipes, menu, costCfg, onSaveRecipe, onDeleteRecipe, onSa
               <div><div style={lbl}>ເສຍຫາຍ / Waste (%)</div><input type="number" min="0" value={edit.wastePct} onChange={e=>setEdit({...edit,wastePct:e.target.value})} style={inp} /></div>
               <div><div style={lbl}>ລາຄາຂາຍຈິງ / Selling price (₭)</div><input type="number" min="0" value={edit.price} onChange={e=>setEdit({...edit,price:e.target.value})} style={inp} /></div>
             </div>
+            <div style={{ marginTop:12 }}>
+              <div style={lbl}>📝 ວິທີເຮັດ / Method — ຂຽນເປັນຂັ້ນຕອນ, ພິມອອກເປັນ SOP ໄດ້ / written out, prints as the SOP sheet</div>
+              <textarea value={edit.note||""} onChange={e=>setEdit({...edit,note:e.target.value})} rows={8}
+                placeholder={"1. ປະສົມແປ້ງກັບນ້ຳ 5 ນາທີ\n2. ພັກໄວ້ 30 ນາທີ\n3. ອົບ 180°C 18 ນາທີ\n\n1. Mix flour and water for 5 min\n2. Rest 30 min\n3. Bake 180°C for 18 min"}
+                style={{ ...inp,fontFamily:"inherit",lineHeight:1.7,resize:"vertical",whiteSpace:"pre-wrap" }} />
+            </div>
           </div>
 
           {/* Ingredients */}
@@ -2051,6 +2093,8 @@ function RecipeView({ recipes, menu, costCfg, onSaveRecipe, onDeleteRecipe, onSa
 
           <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
             <button onClick={save} style={{ flex:1,minWidth:160,padding:14,background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:14 }}>💾 ບັນທຶກສູດ / Save recipe</button>
+            <button onClick={()=>printRecipe(edit,calc,cfg,true)} style={{ padding:"14px 18px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,whiteSpace:"nowrap" }}>🖨️ ພິມ + ຕົ້ນທຶນ</button>
+            <button onClick={()=>printRecipe(edit,calc,cfg,false)} title="ສຳລັບຄົວ — ບໍ່ມີລາຄາ" style={{ padding:"14px 18px",background:"#fff",color:"#1a1a2e",border:"1px solid #e5e7eb",borderRadius:10,fontWeight:700,cursor:"pointer",fontSize:13,whiteSpace:"nowrap" }}>🖨️ ພິມ SOP (ບໍ່ມີລາຄາ)</button>
             {edit.id&&<button onClick={()=>{ if(window.confirm(`ລຶບສູດ “${edit.name}”?\n\nDelete this recipe?`)){ onDeleteRecipe(edit.id); setEdit(null); } }} style={{ padding:"14px 20px",background:"#fef2f2",color:"#dc2626",border:"1px solid #fecaca",borderRadius:10,fontWeight:700,cursor:"pointer" }}>🗑️ ລຶບ</button>}
           </div>
         </>
