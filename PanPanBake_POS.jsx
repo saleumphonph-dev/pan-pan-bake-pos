@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, syncExpense, syncStaff, syncAttendance, syncRecipe, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchStaffSince, fetchAttendanceSince, fetchRecipesSince, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, syncExpense, syncStaff, syncAttendance, syncRecipe, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchStaffSince, fetchAttendanceSince, fetchRecipesSince, fetchRowIds, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
 import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from "./src/lib/push.js";
 
 // ============================================================
@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.13-1";
+const BUILD_VERSION = "2026.08.15-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -3893,13 +3893,37 @@ export default function App() {
       // from epoch) so any device that drifted out of sync converges back to the
       // complete cloud set. Between those, fetch only changes since the cursor.
       pollN += 1;
-      const fullReconcile = (pollN === 1) || (pollN % 10 === 0);
-      const salesSince  = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("salesCursor", EPOCH)) - OVERLAP).toISOString();
-      const shiftsSince = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("shiftsCursor", EPOCH)) - OVERLAP).toISOString();
-      const expSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("expensesCursor", EPOCH)) - OVERLAP).toISOString();
-      const stfSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("staffCursor", EPOCH)) - OVERLAP).toISOString();
-      const attSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("attendanceCursor", EPOCH)) - OVERLAP).toISOString();
-      const recSince    = fullReconcile ? EPOCH : new Date(Date.parse(stor.get("recipesCursor", EPOCH)) - OVERLAP).toISOString();
+      const reconcileDue = (pollN === 1) || (pollN % 10 === 0);
+      // A reconcile only needs to find rows one side is missing, so ask for ids
+      // (a few kB) and re-read whole rows ONLY for a table that is actually out of
+      // step. Re-downloading every table in full on a timer was ~700kB a go, per
+      // device, every 5 minutes — by far the largest thing this app transfers.
+      const RECON = [
+        ["sales",      "sales"],      ["shifts",     "shifts"],
+        ["expenses",   "expenses"],   ["staff",      "staff"],
+        ["attendance", "attendance"], ["recipes",    "recipes"],
+      ];
+      const cloudIds = {}, needFull = {};
+      if (reconcileDue) {
+        const lists = await Promise.all(RECON.map(([t]) => fetchRowIds(t)));
+        if (cancelled) return;
+        RECON.forEach(([t, key], i) => {
+          const ids = lists[i];
+          if (!ids) return;                       // fetch failed — leave it for next time
+          cloudIds[t] = new Set(ids);
+          const local = new Set(stor.get(key, []).map(r => r.id));
+          needFull[t] = ids.some(id => !local.has(id));   // cloud has something we lack
+        });
+      }
+      const since = (t, cursorKey) => (reconcileDue && needFull[t]) ? EPOCH
+        : new Date(Date.parse(stor.get(cursorKey, EPOCH)) - OVERLAP).toISOString();
+      const fullReconcile = reconcileDue;         // still drives the convergence push
+      const salesSince  = since("sales","salesCursor");
+      const shiftsSince = since("shifts","shiftsCursor");
+      const expSince    = since("expenses","expensesCursor");
+      const stfSince    = since("staff","staffCursor");
+      const attSince    = since("attendance","attendanceCursor");
+      const recSince    = since("recipes","recipesCursor");
       const [cs, cf, ce, cst, cat, crc, cmeta] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchExpensesSince(expSince), fetchStaffSince(stfSince), fetchAttendanceSince(attSince), fetchRecipesSince(recSince), fetchSettingsMeta()]);
       if (cancelled) return;
       let purgedAt = stor.get("dataPurgedAt", null);
@@ -3931,13 +3955,13 @@ export default function App() {
         // On a full reconcile we have the COMPLETE cloud set, so push up any local
         // sale that isn't in the cloud yet (writes are egress-free). This is what
         // makes every device's records converge — no bill stays stuck on one device.
-        if (fullReconcile) { const cloudIds = new Set(cs.rows.map(r => r.id)); merged.forEach(o => { if (!cloudIds.has(o.id)) syncOrder(o); }); }
+        if (fullReconcile && cloudIds.sales) { merged.forEach(o => { if (!cloudIds.sales.has(o.id)) syncOrder(o); }); }
       }
       if (cf) {
         const merged = mergeChanges(stor.get("shifts", []), cf.rows, "openedAt", purgeMs);
         stor.set("shifts", merged); setShifts(merged);
         if (cf.cursor) stor.set("shiftsCursor", cf.cursor);
-        if (fullReconcile) { const cloudIds = new Set(cf.rows.map(r => r.id)); merged.forEach(o => { if (!cloudIds.has(o.id)) syncShift(o); }); }
+        if (fullReconcile && cloudIds.shifts) { merged.forEach(o => { if (!cloudIds.shifts.has(o.id)) syncShift(o); }); }
       }
       if (ce) {
         // Expenses have no purge marker of their own — the Reset wipes them via
@@ -3945,25 +3969,25 @@ export default function App() {
         const merged = mergeChanges(stor.get("expenses", []), ce.rows, null, 0);
         stor.set("expenses", merged); setExpenses(merged);
         if (ce.cursor) stor.set("expensesCursor", ce.cursor);
-        if (fullReconcile) { const cloudIds = new Set(ce.rows.map(r => r.id)); merged.forEach(e => { if (!cloudIds.has(e.id)) syncExpense(e); }); }
+        if (fullReconcile && cloudIds.expenses) { merged.forEach(e => { if (!cloudIds.expenses.has(e.id)) syncExpense(e); }); }
       }
       if (cst) {
         const merged = mergeChanges(stor.get("staff", []), cst.rows, null, 0);
         stor.set("staff", merged); setStaff(merged);
         if (cst.cursor) stor.set("staffCursor", cst.cursor);
-        if (fullReconcile) { const ids = new Set(cst.rows.map(r => r.id)); merged.forEach(s => { if (!ids.has(s.id)) syncStaff(s); }); }
+        if (fullReconcile && cloudIds.staff) { merged.forEach(s => { if (!cloudIds.staff.has(s.id)) syncStaff(s); }); }
       }
       if (cat) {
         const merged = mergeChanges(stor.get("attendance", []), cat.rows, null, 0);
         stor.set("attendance", merged); setAttendance(merged);
         if (cat.cursor) stor.set("attendanceCursor", cat.cursor);
-        if (fullReconcile) { const ids = new Set(cat.rows.map(r => r.id)); merged.forEach(a => { if (!ids.has(a.id)) syncAttendance(a); }); }
+        if (fullReconcile && cloudIds.attendance) { merged.forEach(a => { if (!cloudIds.attendance.has(a.id)) syncAttendance(a); }); }
       }
       if (crc) {
         const merged = mergeChanges(stor.get("recipes", []), crc.rows, null, 0);
         stor.set("recipes", merged); setRecipes(merged);
         if (crc.cursor) stor.set("recipesCursor", crc.cursor);
-        if (fullReconcile) { const ids = new Set(crc.rows.map(r => r.id)); merged.forEach(r => { if (!ids.has(r.id)) syncRecipe(r); }); }
+        if (fullReconcile && cloudIds.recipes) { merged.forEach(r => { if (!cloudIds.recipes.has(r.id)) syncRecipe(r); }); }
       }
       if (cmeta) {
         await syncSettings(cmeta);

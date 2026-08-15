@@ -93,6 +93,28 @@ async function fetchChangedRows(table, since) {
   return { rows: res.rows, cursor: res.cursor };
 }
 
+/** Just the ids of every row in a table. This is what the periodic full
+ *  reconcile actually needs — it only has to spot rows that are missing on one
+ *  side or the other. Pulling ids costs a few kB where pulling whole rows costs
+ *  hundreds, and the reconcile runs every few minutes on every device, so this is
+ *  the difference between ~9GB and ~0.2GB of egress a month.
+ *  Returns an array of ids, or null on error (caller then skips reconciling). */
+export async function fetchRowIds(table) {
+  if (!supabase) return null;
+  const PAGE = 1000;
+  try {
+    let all = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase.from(table).select("id").range(from, from + PAGE - 1);
+      if (error) return null;
+      all = all.concat((data || []).map(r => r.id));
+      if (!data || data.length < PAGE) break;
+      if (from > 500000) break;
+    }
+    return all;
+  } catch { return null; }
+}
+
 /** Incremental sales fetch. `since` is an ISO timestamp. Returns { rows, cursor } or null. */
 export async function fetchSalesSince(since) {
   const res = await fetchChangedRows("sales", since);
