@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.17-3";
+const BUILD_VERSION = "2026.08.17-4";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -2036,6 +2036,9 @@ function ProductionView({ menu, categories, sales, production, onSave }) {
       discarded: num(d.discarded, cur ? cur.discarded : 0),
       note: cur ? cur.note : null, deleted: false,
     };
+    // Tapping through a row without typing anything shouldn't create a record.
+    // An existing row still saves at zero, so a figure can be corrected back down.
+    if (!cur && !row.made && !row.left && !row.discarded) return;
     onSave(row);
   };
 
