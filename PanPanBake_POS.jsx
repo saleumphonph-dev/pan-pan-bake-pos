@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.17-2";
+const BUILD_VERSION = "2026.08.17-3";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1977,7 +1977,11 @@ function weekdayAverage(sales, itemId, targetDate, weeks = 4) {
   return Math.round(seen.reduce((a, b) => a + b, 0) / seen.length);
 }
 
-function ProductionView({ menu, sales, production, onSave }) {
+function ProductionView({ menu, categories, sales, production, onSave }) {
+  // Baked goods are what actually get produced in batches; drinks are made to
+  // order. Defaults to 🥐 ເຂົ້າໜົມ, but the shop can switch if that changes.
+  const [cat,setCat]=useState(()=>stor.get("prodCat","bakery"));
+  const pickCat=(c)=>{ setCat(c); stor.set("prodCat",c); setDraft({}); };
   const today = new Date().toLocaleDateString("en-CA");
   const [date, setDate] = useState(today);
   const [search, setSearch] = useState("");
@@ -1999,8 +2003,10 @@ function ProductionView({ menu, sales, production, onSave }) {
     ...recentlySold,
   ]);
   const q = search.trim().toLowerCase();
+  const inCat = (m) => cat === "all" || m.cat === cat;
   const rows = menu
-    .filter(m => q ? ((m.name||"") + (m.nameLao||"")).toLowerCase().includes(q) : tracked.has(String(m.id)))
+    .filter(m => q ? ((m.name||"") + (m.nameLao||"")).toLowerCase().includes(q)
+                   : (inCat(m) && tracked.has(String(m.id))))
     .map(m => {
       const prev = rowFor(prevDate, m.id);
       const carryIn = prev ? Math.max(0, (Number(prev.left)||0) - (Number(prev.discarded)||0)) : 0;
@@ -2052,6 +2058,14 @@ function ProductionView({ menu, sales, production, onSave }) {
         <input type="date" value={date} max={today} onChange={e=>{ setDate(e.target.value); setDraft({}); }} style={{ padding:"8px 10px", borderRadius:8, border:"1px solid #e5e7eb", fontSize:14 }} />
         <button onClick={()=>{ setDate(today); setDraft({}); }} style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #e5e7eb", background:"#fff", cursor:"pointer", fontSize:12, fontWeight:600 }}>ມື້ນີ້ / Today</button>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 ຫາເມນູອື່ນ / find another item" style={{ flex:"1 1 200px", padding:"8px 10px", borderRadius:8, border:"1px solid #e5e7eb", fontSize:13 }} />
+        <div style={{ display:"flex", gap:6, flexWrap:"wrap", flexBasis:"100%" }}>
+          {[...categories.filter(c=>menu.some(m=>m.cat===c.id)), {id:"all",label:"ທັງໝົດ / All"}].map(c=>(
+            <button key={c.id} onClick={()=>pickCat(c.id)} style={{
+              padding:"6px 12px", borderRadius:20, cursor:"pointer", fontSize:12, fontWeight:cat===c.id?700:500,
+              border:"none", background:cat===c.id?"#1a1a2e":"#f3f4f6", color:cat===c.id?"#f4d03f":"#374151"
+            }}>{c.label}</button>
+          ))}
+        </div>
       </div>
 
       <div style={{ ...card, display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))", gap:12 }}>
@@ -4424,7 +4438,7 @@ export default function App() {
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
       {view==="staff"&&<StaffView staff={staff} attendance={attendance} staffCfg={staffCfg} expenses={expenses} role={role} onSaveStaff={saveStaffMember} onDeleteStaff={deleteStaffMember} onSetAttendance={setAttendanceEntry} onSaveCfg={saveStaffCfg} onPostWages={postWages} />}
-      {view==="production"&&<ProductionView menu={menu} sales={sales} production={production} onSave={saveProduction} />}
+      {view==="production"&&<ProductionView menu={menu} categories={categories} sales={sales} production={production} onSave={saveProduction} />}
       {view==="recipe"&&<RecipeView recipes={recipes} menu={menu} costCfg={costCfg} onSaveRecipe={saveRecipe} onDeleteRecipe={deleteRecipe} onSaveCfg={saveCostCfg} />}
       {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
       {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
@@ -4455,7 +4469,7 @@ export default function App() {
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
         {view==="staff"&&<StaffView staff={staff} attendance={attendance} staffCfg={staffCfg} expenses={expenses} role={role} onSaveStaff={saveStaffMember} onDeleteStaff={deleteStaffMember} onSetAttendance={setAttendanceEntry} onSaveCfg={saveStaffCfg} onPostWages={postWages} />}
-      {view==="production"&&<ProductionView menu={menu} sales={sales} production={production} onSave={saveProduction} />}
+      {view==="production"&&<ProductionView menu={menu} categories={categories} sales={sales} production={production} onSave={saveProduction} />}
       {view==="recipe"&&<RecipeView recipes={recipes} menu={menu} costCfg={costCfg} onSaveRecipe={saveRecipe} onDeleteRecipe={deleteRecipe} onSaveCfg={saveCostCfg} />}
       {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
         {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
