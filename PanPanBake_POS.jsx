@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.15-1";
+const BUILD_VERSION = "2026.08.17-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -76,6 +76,58 @@ const EXPENSE_CATS = {
   ],
 };
 const COGS_IDS = ["ingredients", "packaging"];
+
+
+// ── Backup export ─────────────────────────────────────────────────────
+// The free plan has no daily backups, so the owner can take their own. Reads
+// straight from localStorage, which is this device's source of truth and holds
+// everything even when the cloud is unreachable.
+const BACKUP_KEYS = ["sales","shifts","expenses","staff","attendance","recipes",
+                     "menu","categories","addons","shopInfo","staffCfg","costCfg","parked"];
+
+function saveFile(filename, text, mime) {
+  try {
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.style.display = "none";
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+    return true;
+  } catch (e) { return false; }
+}
+
+const csvCell = (v) => {
+  const s = String(v ?? "");
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+};
+
+/** Everything, as one JSON file — the restore copy. */
+function exportBackup() {
+  const out = { app: "Pan Pan Bake POS", version: BUILD_VERSION, exportedAt: new Date().toISOString() };
+  const counts = {};
+  BACKUP_KEYS.forEach(k => { const v = stor.get(k, null); out[k] = v; if (Array.isArray(v)) counts[k] = v.length; });
+  out._counts = counts;
+  const name = `panpan-backup-${new Date().toISOString().slice(0,10)}.json`;
+  const ok = saveFile(name, JSON.stringify(out, null, 2), "application/json");
+  return { ok, name, counts };
+}
+
+/** Sales and expenses as CSV, for a spreadsheet or the accountant. */
+function exportSalesCsv() {
+  const sales = (stor.get("sales", []) || []).filter(s => !s.deleted);
+  const head = ["date","bill_id","cashier","payment","voided","items","qty","discount","total","net"];
+  const rows = sales.map(s => {
+    const qty = (s.items||[]).reduce((a,i)=>a+(Number(i.qty)||0),0);
+    const gross = (s.items||[]).reduce((a,i)=>a+itemPrice(i)*(Number(i.qty)||0),0);
+    return [ s.date, s.id, s.cashier, s.payment, s.voided ? "VOID" : "",
+             (s.items||[]).map(i=>`${i.name} x${i.qty}`).join("; "),
+             qty, s.discount||0, gross, gross-(s.discount||0) ].map(csvCell).join(",");
+  });
+  const name = `panpan-sales-${new Date().toISOString().slice(0,10)}.csv`;
+  // BOM so Excel opens Lao text correctly
+  const ok = saveFile(name, "\uFEFF" + [head.join(","), ...rows].join("\n"), "text/csv;charset=utf-8");
+  return { ok, name, rows: rows.length };
+}
 
 // ── Recipe costing (owner) ────────────────────────────────────────────
 // Standard food-costing model, kept deliberately separate from sales/menu data.
@@ -2843,6 +2895,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
   const [printerCfg,setPrinterCfg]=useState(()=>stor.get("printerConfig",PRINTER_DEFAULT));
   const [,setSoundTick]=useState(0); // force re-render when the sale-sound / alert toggles change
   const [pushMsg,setPushMsg]=useState("");
+  const [backupMsg,setBackupMsg]=useState("");
   const fileRef=useRef(null); const editFileRef=useRef(null); const qrRef=useRef(null); const logoRef=useRef(null);
 
   const savePrinter=(patch)=>{ const next={...stor.get("printerConfig",PRINTER_DEFAULT),...patch}; setPrinterCfg(next); stor.set("printerConfig",next); };
@@ -3156,6 +3209,32 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
 
       {tab==="system"&&role==="owner"&&(
         <div>
+          <div style={{ background:"#fff",borderRadius:14,padding:20,border:"2px solid #bbf7d0",marginBottom:16 }}>
+            <div style={{ fontSize:15,fontWeight:700,color:"#16a34a",marginBottom:6 }}>💾 ສຳຮອງຂໍ້ມູນ / Backup your data</div>
+            <div style={{ fontSize:12,color:"#6b7280",marginBottom:14,lineHeight:1.7 }}>
+              ດາວໂຫຼດຂໍ້ມູນທັງໝົດເກັບໄວ້ໃນເຄື່ອງ — ການຂາຍ, ລາຍຈ່າຍ, ພະນັກງານ, ສູດ, ເມນູ.<br/>
+              <span style={{ color:"#16a34a",fontWeight:600 }}>Downloads everything to this device. Do it weekly and keep the file somewhere safe.</span>
+            </div>
+            {backupMsg && <div style={{ fontSize:12,color:"#166534",background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:8,padding:"8px 10px",marginBottom:12,whiteSpace:"pre-line" }}>{backupMsg}</div>}
+            <div style={{ display:"flex",gap:8,flexWrap:"wrap" }}>
+              <button onClick={()=>{ const r=exportBackup();
+                  setBackupMsg(r.ok
+                    ? `✓ ດາວໂຫຼດແລ້ວ / Saved: ${r.name}\n${Object.entries(r.counts).map(([k,v])=>`${k}: ${v}`).join(" · ")}`
+                    : "❌ ດາວໂຫຼດບໍ່ໄດ້ / Download failed — try from a browser tab rather than the installed app."); }}
+                style={{ padding:"12px 18px",background:"#16a34a",color:"#fff",border:"none",borderRadius:9,fontWeight:700,cursor:"pointer",fontSize:13 }}>
+                ⬇️ ດາວໂຫຼດຂໍ້ມູນທັງໝົດ / Download all data
+              </button>
+              <button onClick={()=>{ const r=exportSalesCsv();
+                  setBackupMsg(r.ok ? `✓ ${r.name} — ${r.rows} ໃບ / bills` : "❌ ດາວໂຫຼດບໍ່ໄດ້ / Download failed"); }}
+                style={{ padding:"12px 18px",background:"#fff",color:"#1a1a2e",border:"1px solid #e5e7eb",borderRadius:9,fontWeight:700,cursor:"pointer",fontSize:13 }}>
+                📊 ການຂາຍ CSV / Sales for Excel
+              </button>
+            </div>
+            <div style={{ fontSize:11,color:"#9ca3af",marginTop:10,lineHeight:1.6 }}>
+              ໄຟລ໌ JSON ຄືສຳເນົາເຕັມ (ໃຊ້ກູ້ຄືນໄດ້) · CSV ສຳລັບ Excel<br/>
+              The JSON file is the full copy for restoring; the CSV is for opening in Excel.
+            </div>
+          </div>
           <div style={{ background:"#fff",borderRadius:14,padding:20,border:"2px solid #bfdbfe" }}>
             <div style={{ fontSize:15,fontWeight:700,color:"#2563eb",marginBottom:6 }}>🔄 Force Refresh (PWA)</div>
             <div style={{ fontSize:12,color:"#6b7280",marginBottom:14,lineHeight:1.6 }}>
