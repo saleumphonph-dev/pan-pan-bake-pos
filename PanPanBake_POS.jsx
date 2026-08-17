@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, syncExpense, syncStaff, syncAttendance, syncRecipe, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchStaffSince, fetchAttendanceSince, fetchRecipesSince, fetchRowIds, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, syncExpense, syncStaff, syncAttendance, syncRecipe, syncProduction, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchStaffSince, fetchAttendanceSince, fetchRecipesSince, fetchProductionSince, fetchRowIds, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
 import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from "./src/lib/push.js";
 
 // ============================================================
@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.17-1";
+const BUILD_VERSION = "2026.08.17-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1931,6 +1931,195 @@ function DashboardView({ sales, masked, onToggleNumbers }) {
 }
 
 // ============================================================
+// DAILY PRODUCTION — what was baked, what sold, what was left
+// ============================================================
+// The POS already records what sold, per item, per day, so the sheet only ever
+// asks for two numbers: made, and left at close. Everything else is derived:
+//
+//   carried in (yesterday's left − discarded)
+//   + made            ← typed
+//   = available
+//   − sold            ← from the bills
+//   = should be left
+//   vs left           ← typed (counted at close)
+//   = variance        (negative means product went without being rung up)
+//
+// Discarded is subtracted before carrying forward, so bread that gets binned
+// doesn't inflate tomorrow's opening stock while cakes that keep still do.
+const localDay = (iso) => { try { return new Date(iso).toLocaleDateString("en-CA"); } catch { return String(iso).slice(0,10); } };
+
+/** Units sold per menu item on one local date. */
+function soldOnDate(sales, date) {
+  const out = {};
+  sales.forEach(s => {
+    if (s.voided || s.deleted) return;
+    if (localDay(s.date) !== date) return;
+    (s.items || []).forEach(i => {
+      const k = String(i.id);
+      out[k] = (out[k] || 0) + (Number(i.qty) || 0);
+    });
+  });
+  return out;
+}
+
+/** Average units sold on the same weekday over the last few weeks. */
+function weekdayAverage(sales, itemId, targetDate, weeks = 4) {
+  const target = new Date(targetDate + "T00:00:00");
+  const totals = [];
+  for (let w = 1; w <= weeks; w++) {
+    const d = new Date(target); d.setDate(d.getDate() - 7 * w);
+    const key = d.toLocaleDateString("en-CA");
+    const sold = soldOnDate(sales, key)[String(itemId)] || 0;
+    totals.push(sold);
+  }
+  const seen = totals.filter(n => n > 0);
+  if (!seen.length) return null;
+  return Math.round(seen.reduce((a, b) => a + b, 0) / seen.length);
+}
+
+function ProductionView({ menu, sales, production, onSave }) {
+  const today = new Date().toLocaleDateString("en-CA");
+  const [date, setDate] = useState(today);
+  const [search, setSearch] = useState("");
+  const [draft, setDraft] = useState({});          // {itemId: {made,left,discarded}}
+  const prevDate = (() => { const d = new Date(date + "T00:00:00"); d.setDate(d.getDate() - 1); return d.toLocaleDateString("en-CA"); })();
+
+  const live = production.filter(p => !p.deleted);
+  const rowFor = (d, id) => live.find(p => p.date === d && String(p.itemId) === String(id)) || null;
+  const sold = soldOnDate(sales, date);
+
+  // Auto-curated list: made yesterday or today, or sold in the last 7 days.
+  const recentlySold = new Set();
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(date + "T00:00:00"); d.setDate(d.getDate() - i);
+    Object.keys(soldOnDate(sales, d.toLocaleDateString("en-CA"))).forEach(k => recentlySold.add(k));
+  }
+  const tracked = new Set([
+    ...live.filter(p => p.date === date || p.date === prevDate).map(p => String(p.itemId)),
+    ...recentlySold,
+  ]);
+  const q = search.trim().toLowerCase();
+  const rows = menu
+    .filter(m => q ? ((m.name||"") + (m.nameLao||"")).toLowerCase().includes(q) : tracked.has(String(m.id)))
+    .map(m => {
+      const prev = rowFor(prevDate, m.id);
+      const carryIn = prev ? Math.max(0, (Number(prev.left)||0) - (Number(prev.discarded)||0)) : 0;
+      const cur = rowFor(date, m.id);
+      const d = draft[m.id] || {};
+      const made      = d.made      !== undefined ? d.made      : (cur ? cur.made : "");
+      const left      = d.left      !== undefined ? d.left      : (cur ? cur.left : "");
+      const discarded = d.discarded !== undefined ? d.discarded : (cur ? cur.discarded : "");
+      const s = sold[String(m.id)] || 0;
+      const available = carryIn + (Number(made) || 0);
+      const should = available - s;
+      const hasLeft = String(left) !== "";
+      const variance = hasLeft ? (Number(left) || 0) - should : null;
+      return { m, carryIn, made, left, discarded, sold: s, available, should, variance,
+               suggest: weekdayAverage(sales, m.id, date) };
+    })
+    .sort((a, b) => (b.sold - a.sold) || String(a.m.name).localeCompare(String(b.m.name)));
+
+  const commit = (m, patch) => {
+    const cur = rowFor(date, m.id);
+    const d = { ...(draft[m.id] || {}), ...patch };
+    const num = (v, fb) => v === "" || v === undefined ? fb : (Number(v) || 0);
+    const row = {
+      id: `${date}_${m.id}`, date, itemId: String(m.id), itemName: m.name,
+      made:      num(d.made,      cur ? cur.made : 0),
+      left:      num(d.left,      cur ? cur.left : 0),
+      discarded: num(d.discarded, cur ? cur.discarded : 0),
+      note: cur ? cur.note : null, deleted: false,
+    };
+    onSave(row);
+  };
+
+  const T = rows.reduce((a, r) => ({
+    made: a.made + (Number(r.made)||0), sold: a.sold + r.sold,
+    left: a.left + (Number(r.left)||0), disc: a.disc + (Number(r.discarded)||0),
+    varn: a.varn + (r.variance || 0),
+  }), { made:0, sold:0, left:0, disc:0, varn:0 });
+
+  const inp = { width:60, padding:"7px 6px", borderRadius:7, border:"1px solid #e5e7eb", fontSize:13, textAlign:"right", boxSizing:"border-box" };
+  const card = { background:"#fff", borderRadius:12, padding:16, border:"1px solid #e5e7eb", marginBottom:14 };
+
+  return (
+    <div style={{ padding:"20px 24px", fontFamily:"'Noto Sans Lao',sans-serif", background:"#f0ece4", minHeight:"100vh" }}>
+      <h1 style={{ margin:"0 0 4px", fontSize:22, fontWeight:700 }}>🍞 ຜະລິດປະຈຳວັນ</h1>
+      <div style={{ fontSize:13, color:"#6b7280", marginBottom:16 }}>Daily production — ໃສ່ແຕ່ “ເຮັດ” ແລະ “ເຫຼືອ”, ທີ່ເຫຼືອຄິດໄລ່ໃຫ້ / you enter made and left, the rest is worked out</div>
+
+      <div style={{ ...card, display:"flex", gap:12, flexWrap:"wrap", alignItems:"center" }}>
+        <span style={{ fontSize:13, fontWeight:600 }}>📅 ວັນທີ / Date</span>
+        <input type="date" value={date} max={today} onChange={e=>{ setDate(e.target.value); setDraft({}); }} style={{ padding:"8px 10px", borderRadius:8, border:"1px solid #e5e7eb", fontSize:14 }} />
+        <button onClick={()=>{ setDate(today); setDraft({}); }} style={{ padding:"8px 12px", borderRadius:8, border:"1px solid #e5e7eb", background:"#fff", cursor:"pointer", fontSize:12, fontWeight:600 }}>ມື້ນີ້ / Today</button>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 ຫາເມນູອື່ນ / find another item" style={{ flex:"1 1 200px", padding:"8px 10px", borderRadius:8, border:"1px solid #e5e7eb", fontSize:13 }} />
+      </div>
+
+      <div style={{ ...card, display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(120px,1fr))", gap:12 }}>
+        {[["ເຮັດ / Made", T.made, "#2563eb"], ["ຂາຍ / Sold", T.sold, "#16a34a"],
+          ["ເຫຼືອ / Left", T.left, "#d97706"], ["ຖິ້ມ / Binned", T.disc, "#dc2626"],
+          ["ຂາດ / Unaccounted", T.varn, T.varn < 0 ? "#dc2626" : "#9ca3af"]].map(([l,v,c])=>(
+          <div key={l}><div style={{ fontSize:11, color:"#6b7280", marginBottom:4 }}>{l}</div>
+            <div style={{ fontSize:20, fontWeight:700, color:c }}>{v}</div></div>
+        ))}
+      </div>
+
+      <div style={{ ...card, padding:0, overflow:"hidden" }}>
+        <div style={{ overflowX:"auto" }}>
+          <table style={{ borderCollapse:"collapse", fontSize:12, minWidth:720, width:"100%" }}>
+            <thead><tr style={{ background:"#f9fafb" }}>
+              {[["ເມນູ / Item","left"],["ຍົກມາ","right"],["ເຮັດ / Made","right"],["ຂາຍ","right"],["ຄວນເຫຼືອ","right"],["ເຫຼືອຈິງ / Left","right"],["ຖິ້ມ","right"],["ຂາດ","right"]].map(([h,al])=>(
+                <th key={h} style={{ padding:"9px 8px", textAlign:al, fontWeight:700, borderBottom:"1px solid #e5e7eb", whiteSpace:"nowrap" }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {rows.map(r=>(
+                <tr key={r.m.id} style={{ borderBottom:"1px solid #f3f4f6" }}>
+                  <td style={{ padding:"6px 8px", minWidth:150 }}>
+                    <div style={{ fontWeight:600 }}>{r.m.name}</div>
+                    <div style={{ fontSize:10, color:"#9ca3af" }}>
+                      {r.m.nameLao || "—"}{r.suggest!=null && <span style={{ color:"#2563eb" }}> · ແນະນຳ {r.suggest}</span>}
+                    </div>
+                  </td>
+                  <td style={{ padding:"6px 8px", textAlign:"right", color:r.carryIn?"#d97706":"#d1d5db" }}>{r.carryIn||"—"}</td>
+                  <td style={{ padding:"6px 8px", textAlign:"right" }}>
+                    <input type="number" min="0" value={r.made} placeholder={r.suggest!=null?String(r.suggest):"0"}
+                      onChange={e=>setDraft(d=>({...d,[r.m.id]:{...(d[r.m.id]||{}),made:e.target.value}}))}
+                      onBlur={()=>commit(r.m,{})} style={inp} />
+                  </td>
+                  <td style={{ padding:"6px 8px", textAlign:"right", fontWeight:700, color:"#16a34a" }}>{r.sold||"—"}</td>
+                  <td style={{ padding:"6px 8px", textAlign:"right", color:"#6b7280" }}>{(Number(r.made)||r.carryIn)?r.should:"—"}</td>
+                  <td style={{ padding:"6px 8px", textAlign:"right" }}>
+                    <input type="number" min="0" value={r.left} placeholder="0"
+                      onChange={e=>setDraft(d=>({...d,[r.m.id]:{...(d[r.m.id]||{}),left:e.target.value}}))}
+                      onBlur={()=>commit(r.m,{})} style={inp} />
+                  </td>
+                  <td style={{ padding:"6px 8px", textAlign:"right" }}>
+                    <input type="number" min="0" value={r.discarded} placeholder="0"
+                      onChange={e=>setDraft(d=>({...d,[r.m.id]:{...(d[r.m.id]||{}),discarded:e.target.value}}))}
+                      onBlur={()=>commit(r.m,{})} style={{ ...inp, width:52 }} />
+                  </td>
+                  <td style={{ padding:"6px 8px", textAlign:"right", fontWeight:700, whiteSpace:"nowrap",
+                        color:r.variance==null?"#d1d5db":r.variance<0?"#dc2626":r.variance>0?"#d97706":"#16a34a" }}>
+                    {r.variance==null?"—":(r.variance>0?"+":"")+r.variance}
+                  </td>
+                </tr>
+              ))}
+              {rows.length===0&&<tr><td colSpan={8} style={{ padding:24, textAlign:"center", color:"#9ca3af" }}>
+                {search?"ບໍ່ພົບເມນູ / no match":"ຍັງບໍ່ມີລາຍການ — ຄົ້ນຫາເມນູເພື່ອເລີ່ມ / nothing yet, search for an item to start"}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style={{ fontSize:11, color:"#9ca3af", lineHeight:1.7 }}>
+        ຍົກມາ = ເຫຼືອມື້ວານ − ຖິ້ມ · ຄວນເຫຼືອ = ຍົກມາ + ເຮັດ − ຂາຍ · ຂາດ = ເຫຼືອຈິງ − ຄວນເຫຼືອ<br/>
+        Carried in = yesterday's left minus binned. Unaccounted is negative when stock went without being rung up.
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // RECIPE COSTING — work out COGS and a selling price (owner only)
 // ============================================================
 /** One recipe as an A4 sheet. `withCosts` off gives the kitchen copy: the same
@@ -3743,6 +3932,7 @@ const NAV=[
   {id:"report",label:"ລາຍງານ",icon:"📈",roles:["manager","owner"]},
   {id:"history",label:"ປະຫວັດ",icon:"🧾",roles:["manager","owner"]},
   {id:"staff",label:"ພະນັກງານ",icon:"👥",roles:["manager","owner"]},
+  {id:"production",label:"ຜະລິດ",icon:"🍞",roles:["cashier","manager","owner"]},
   {id:"recipe",label:"ຕົ້ນທຶນ",icon:"🧮",roles:["owner"]},
   {id:"accounting",label:"ບັນຊີ",icon:"📒",roles:["manager","owner"]},
   {id:"admin",label:"ຈັດການ",icon:"⚙️",roles:["manager","owner"]},
@@ -3780,6 +3970,7 @@ export default function App() {
   const [attendance,setAttendance]=useState(()=>stor.get("attendance",[]));
   const [staffCfg,setStaffCfg]=useState(()=>stor.get("staffCfg",STAFF_CFG_DEFAULT));
   const [recipes,setRecipes]=useState(()=>stor.get("recipes",[]));
+  const [production,setProduction]=useState(()=>stor.get("production",[]));
   const [costCfg,setCostCfg]=useState(()=>stor.get("costCfg",COST_CFG_DEFAULT));
   const [qrImage,setQrImage]=useState(()=>stor.get("qrImage",""));
   const [shopInfo,setShopInfo]=useState(()=>stor.get("shopInfo",DEFAULT_SHOP_INFO));
@@ -3981,6 +4172,7 @@ export default function App() {
         ["sales",      "sales"],      ["shifts",     "shifts"],
         ["expenses",   "expenses"],   ["staff",      "staff"],
         ["attendance", "attendance"], ["recipes",    "recipes"],
+        ["production", "production"],
       ];
       const cloudIds = {}, needFull = {};
       if (reconcileDue) {
@@ -4003,7 +4195,8 @@ export default function App() {
       const stfSince    = since("staff","staffCursor");
       const attSince    = since("attendance","attendanceCursor");
       const recSince    = since("recipes","recipesCursor");
-      const [cs, cf, ce, cst, cat, crc, cmeta] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchExpensesSince(expSince), fetchStaffSince(stfSince), fetchAttendanceSince(attSince), fetchRecipesSince(recSince), fetchSettingsMeta()]);
+      const prdSince    = since("production","productionCursor");
+      const [cs, cf, ce, cst, cat, crc, cpr, cmeta] = await Promise.all([fetchSalesSince(salesSince), fetchShiftsSince(shiftsSince), fetchExpensesSince(expSince), fetchStaffSince(stfSince), fetchAttendanceSince(attSince), fetchRecipesSince(recSince), fetchProductionSince(prdSince), fetchSettingsMeta()]);
       if (cancelled) return;
       let purgedAt = stor.get("dataPurgedAt", null);
       // dataPurgedAt is a tiny value, but it still only needs fetching when it moves.
@@ -4068,6 +4261,12 @@ export default function App() {
         if (crc.cursor) stor.set("recipesCursor", crc.cursor);
         if (fullReconcile && cloudIds.recipes) { merged.forEach(r => { if (!cloudIds.recipes.has(r.id)) syncRecipe(r); }); }
       }
+      if (cpr) {
+        const merged = mergeChanges(stor.get("production", []), cpr.rows, null, 0);
+        stor.set("production", merged); setProduction(merged);
+        if (cpr.cursor) stor.set("productionCursor", cpr.cursor);
+        if (fullReconcile && cloudIds.production) { merged.forEach(r => { if (!cloudIds.production.has(r.id)) syncProduction(r); }); }
+      }
       if (cmeta) {
         await syncSettings(cmeta);
         // Compare instants, not strings: our own pushes store a client ISO stamp
@@ -4081,6 +4280,7 @@ export default function App() {
       retryPending("pendingStaff", "staff", syncStaff);
       retryPending("pendingAttendance", "attendance", syncAttendance);
       retryPending("pendingRecipes", "recipes", syncRecipe);
+      retryPending("pendingProduction", "production", syncProduction);
     };
     sync(); // immediate on login
     const id = setInterval(sync, 30000); // every 30s (was 10s — big egress cut)
@@ -4119,6 +4319,8 @@ export default function App() {
   const saveRecipe=(r)=>{ const u=recipes.some(x=>x.id===r.id)?recipes.map(x=>x.id===r.id?r:x):[...recipes,r]; setRecipes(u); stor.set("recipes",u); pushRecipe(r); };
   const deleteRecipe=(id)=>{ const row=recipes.find(x=>x.id===id); if(!row)return; const t={...row,deleted:true}; const u=recipes.map(x=>x.id===id?t:x); setRecipes(u); stor.set("recipes",u); pushRecipe(t); };
   const saveCostCfg=(c)=>{ setCostCfg(c); pushSetting("costCfg",c); };
+  const pushProduction=(r)=>{ syncProduction(r).then(ok=>markPending("pendingProduction",r.id,ok)).catch(()=>markPending("pendingProduction",r.id,false)); };
+  const saveProduction=(r)=>{ const u=production.some(x=>x.id===r.id)?production.map(x=>x.id===r.id?r:x):[...production,r]; setProduction(u); stor.set("production",u); pushProduction(r); };
   // The ONLY place staff data touches the books: one expense row per month, with a
   // fixed id so re-posting updates it instead of stacking duplicates.
   const postWages=(month,amount)=>{
@@ -4222,6 +4424,7 @@ export default function App() {
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
       {view==="staff"&&<StaffView staff={staff} attendance={attendance} staffCfg={staffCfg} expenses={expenses} role={role} onSaveStaff={saveStaffMember} onDeleteStaff={deleteStaffMember} onSetAttendance={setAttendanceEntry} onSaveCfg={saveStaffCfg} onPostWages={postWages} />}
+      {view==="production"&&<ProductionView menu={menu} sales={sales} production={production} onSave={saveProduction} />}
       {view==="recipe"&&<RecipeView recipes={recipes} menu={menu} costCfg={costCfg} onSaveRecipe={saveRecipe} onDeleteRecipe={deleteRecipe} onSaveCfg={saveCostCfg} />}
       {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
       {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
@@ -4252,6 +4455,7 @@ export default function App() {
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
         {view==="staff"&&<StaffView staff={staff} attendance={attendance} staffCfg={staffCfg} expenses={expenses} role={role} onSaveStaff={saveStaffMember} onDeleteStaff={deleteStaffMember} onSetAttendance={setAttendanceEntry} onSaveCfg={saveStaffCfg} onPostWages={postWages} />}
+      {view==="production"&&<ProductionView menu={menu} sales={sales} production={production} onSave={saveProduction} />}
       {view==="recipe"&&<RecipeView recipes={recipes} menu={menu} costCfg={costCfg} onSaveRecipe={saveRecipe} onDeleteRecipe={deleteRecipe} onSaveCfg={saveCostCfg} />}
       {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
         {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}

@@ -88,7 +88,7 @@ async function fetchChangedRows(table, since) {
   // (migration pending), fall back to the creation-date column so NEW rows still
   // sync incrementally and cheaply; voids/edits catch up once updated_at exists.
   let res = await runOn("updated_at");
-  if (res.error) res = await runOn(table === "shifts" ? "opened_at" : (table === "expenses" || table === "staff" || table === "attendance" || table === "recipes") ? "created_at" : "date");
+  if (res.error) res = await runOn(table === "shifts" ? "opened_at" : (table === "expenses" || table === "staff" || table === "attendance" || table === "recipes" || table === "production") ? "created_at" : "date");
   if (res.error) return null;
   return { rows: res.rows, cursor: res.cursor };
 }
@@ -184,6 +184,49 @@ export async function fetchExpensesSince(since) {
       date:     r.exp_date || null,
       supplier: r.supplier || null,
       createdAt: r.created_at,
+    })),
+  };
+}
+
+/** Upsert one day's production row for one menu item. */
+export async function syncProduction(r) {
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase.from("production").upsert({
+      id:        r.id,
+      date:      r.date,
+      item_id:   String(r.itemId),
+      item_name: r.itemName ?? null,
+      made:      r.made ?? 0,
+      left_qty:  r.left ?? 0,
+      discarded: r.discarded ?? 0,
+      note:      r.note ?? null,
+      deleted:   r.deleted ?? false,
+      updated_at: new Date().toISOString(),
+    });
+    return !error;
+  } catch (e) {
+    console.warn("[Supabase] syncProduction failed:", e.message);
+    return false;
+  }
+}
+
+/** Incremental production fetch. Returns { rows, cursor } or null. */
+export async function fetchProductionSince(since) {
+  const res = await fetchChangedRows("production", since);
+  if (res == null) return null;
+  return {
+    cursor: res.cursor,
+    rows: res.rows.map(r => ({
+      id:        r.id,
+      date:      r.date,
+      itemId:    r.item_id,
+      itemName:  r.item_name,
+      made:      Number(r.made) || 0,
+      left:      Number(r.left_qty) || 0,
+      discarded: Number(r.discarded) || 0,
+      note:      r.note,
+      deleted:   r.deleted ?? false,
     })),
   };
 }
