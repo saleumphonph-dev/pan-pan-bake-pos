@@ -21,14 +21,23 @@ jobs:
           SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
-            "$SUPABASE_URL/rest/v1/sales?select=id&limit=1" \
-            -H "apikey: $SUPABASE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_KEY")
-          echo "Supabase responded with HTTP $code"
-          if [ "$code" = "200" ] || [ "$code" = "206" ]; then
-            echo "✅ Keep-alive OK — project is active."
-          else
-            echo "❌ Keep-alive failed (HTTP $code) — project may be paused or down."
-            exit 1
-          fi
+          # Retry before crying wolf. A single 503 is usually a momentary blip on
+          # the shared free-tier pooler, not a paused project — two such blips
+          # raised failures on 27 and 28 Aug while the database was serving the
+          # shop normally either side of them. Only a run where every attempt
+          # fails is worth an alert.
+          for attempt in 1 2 3 4 5; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 \
+              "$SUPABASE_URL/rest/v1/sales?select=id&limit=1" \
+              -H "apikey: $SUPABASE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_KEY")
+            if [ "$code" = "200" ] || [ "$code" = "206" ]; then
+              echo "✅ Keep-alive OK on attempt $attempt (HTTP $code) — project is active."
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code"
+            [ "$attempt" -lt 5 ] && sleep 30
+          done
+          echo "❌ Keep-alive failed 5 times over ~2 minutes (last HTTP $code)."
+          echo "   The project may genuinely be paused or down — check the Supabase dashboard."
+          exit 1
