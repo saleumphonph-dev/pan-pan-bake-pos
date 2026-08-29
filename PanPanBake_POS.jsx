@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.17-4";
+const BUILD_VERSION = "2026.08.29-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -3621,7 +3621,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
 // ============================================================
 // SHIFT VIEW
 // ============================================================
-function ShiftView({ shifts, sales, currentShift, onOpen, onClose, masked, onToggleNumbers }) {
+function ShiftView({ shifts, sales, currentShift, staleOpen = [], onCloseStale, onOpen, onClose, masked, onToggleNumbers }) {
   const [expanded,setExpanded]=useState(null);
   const todayStr=new Date().toISOString().slice(0,10);
   // Today's takings stay visible (the person on duty counts the till against
@@ -3671,6 +3671,29 @@ function ShiftView({ shifts, sales, currentShift, onOpen, onClose, masked, onTog
           </div>
         )}
       </div>
+      {staleOpen.length > 0 && (
+        <div style={{ background:"#fffbeb",border:"1px solid #fde68a",borderRadius:12,padding:16,marginBottom:16 }}>
+          <div style={{ fontSize:14,fontWeight:700,color:"#b45309",marginBottom:6 }}>
+            ⚠️ ມີກະເກົ່າຍັງບໍ່ໄດ້ປິດ / {staleOpen.length} older shift{staleOpen.length>1?"s":""} left open
+          </div>
+          <div style={{ fontSize:12,color:"#92400e",marginBottom:12,lineHeight:1.6 }}>
+            ບິນອາດຈະໄປລົງກະເກົ່າ ເຮັດໃຫ້ຍອດກະບໍ່ຖືກ — ປິດມັນເພື່ອໃຫ້ຍອດຖືກຕ້ອງ.<br/>
+            Bills can land on an old shift and throw its totals out. Close it to tidy the records.
+          </div>
+          {staleOpen.map(sh=>{
+            const n=sales.filter(x=>!x.voided&&x.shiftId===sh.id).length;
+            return (
+              <div key={sh.id} style={{ display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",background:"#fff",borderRadius:8,padding:"10px 12px",marginBottom:8 }}>
+                <div style={{ fontSize:13 }}>
+                  <b>{fmtDate(sh.openedAt)}</b> · {sh.cashier}
+                  <div style={{ fontSize:11,color:"#9ca3af" }}>{fmtTime(sh.openedAt)} · {n} ໃບ</div>
+                </div>
+                <button onClick={()=>onCloseStale&&onCloseStale(sh.id)} style={{ padding:"8px 14px",borderRadius:8,border:"none",background:"#1a1a2e",color:"#f4d03f",cursor:"pointer",fontSize:12,fontWeight:700,whiteSpace:"nowrap" }}>🔒 ປິດກະນີ້ / Close it</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div style={{ fontSize:15,fontWeight:700,marginBottom:12 }}>ປະຫວັດກະ</div>
 
       {/* Filters. The list is sorted by openedAt — the old code just reversed the
@@ -4023,7 +4046,12 @@ export default function App() {
   const mode = layoutMode === "auto" ? autoMode : layoutMode;
   const switchMode = (m) => { setLayoutMode(m); stor.set("layoutMode", m); };
 
-  const currentShift=shifts.find(s=>!s.closedAt);
+  // The NEWEST unclosed shift, not the first one in the array. Array order is
+  // sync-arrival order, so .find() let two devices pick different shifts when
+  // more than one was left open — bills then landed on a days-old shift.
+  const openShifts=shifts.filter(s=>!s.closedAt&&!s.deleted)
+    .sort((a,b)=>(Date.parse(b.openedAt)||0)-(Date.parse(a.openedAt)||0));
+  const currentShift=openShifts[0];
 
   // ── Settings cloud sync (menu, categories, add-ons, shop info) ──
   // These were local-only before, so editing the menu on one device never
@@ -4356,7 +4384,7 @@ export default function App() {
   };
   const updateSale=(o)=>{ const u=sales.map(s=>s.id===o.id?o:s);setSales(u);stor.set("sales",u);pushOrder(o); };
   const openShift=({cash,notes})=>{ const s={id:genId(),openedAt:new Date().toISOString(),openingCash:cash,cashier:ROLES[role].label,notes};const u=[...shifts,s];setShifts(u);stor.set("shifts",u);pushShift(s);setShiftModal(null); };
-  const closeShift=({cash,notes,expected})=>{ const u=shifts.map(s=>s.id===currentShift.id?{...s,closedAt:new Date().toISOString(),closingCash:cash,expectedCash:expected,variance:cash-expected,notes:(s.notes?s.notes+" | ":"")+(notes||"")}:s);setShifts(u);stor.set("shifts",u);pushShift(u.find(s=>s.id===currentShift.id));setShiftModal(null); };
+  const closeShift=({cash,notes,expected,targetId})=>{ const tid=targetId||currentShift.id; const u=shifts.map(s=>s.id===tid?{...s,closedAt:new Date().toISOString(),closingCash:cash,expectedCash:expected,variance:cash-expected,notes:(s.notes?s.notes+" | ":"")+(notes||"")}:s);setShifts(u);stor.set("shifts",u);pushShift(u.find(s=>s.id===tid));setShiftModal(null); };
 
   const resetTestData=async()=>{
     const c1=window.prompt("⚠️ ນີ້ຈະລຶບ Sales, Shifts, ແລະ Expenses ທັງໝົດ (ທັງໃນເຄື່ອງ ແລະ ໃນ Cloud).\nMenu, settings, QR ຈະຍັງຄົງຢູ່.\n\nພິມ RESET ເພື່ອຢືນຢັນ:");
@@ -4436,7 +4464,7 @@ export default function App() {
         }}>🔔 ຂາຍໃໝ່ / New sale &nbsp;·&nbsp; {saleAlert.text}</div>
       )}
       {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
-      {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
+      {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} staleOpen={openShifts.slice(1)} onCloseStale={(id)=>setShiftModal({type:"close",targetId:id})} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="dashboard"&&<DashboardView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
@@ -4467,7 +4495,7 @@ export default function App() {
         <UpdateBanner />
         <OfflineBanner />
         {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
-        {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
+        {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} staleOpen={openShifts.slice(1)} onCloseStale={(id)=>setShiftModal({type:"close",targetId:id})} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="dashboard"&&<DashboardView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
@@ -4494,7 +4522,7 @@ export default function App() {
           </button>
         ))}
       </div>
-      {shiftModal&&<ShiftModal type={shiftModal} currentShift={currentShift} sales={sales} onSubmit={shiftModal==="open"?openShift:closeShift} onCancel={()=>setShiftModal(null)} />}
+      {shiftModal&&<ShiftModal type={typeof shiftModal==="string"?shiftModal:shiftModal.type} currentShift={typeof shiftModal==="object"&&shiftModal.targetId?shifts.find(x=>x.id===shiftModal.targetId):currentShift} sales={sales} onSubmit={shiftModal==="open"?openShift:(d)=>closeShift({...d,targetId:typeof shiftModal==="object"?shiftModal.targetId:undefined})} onCancel={()=>setShiftModal(null)} />}
     </div>
   );
 
@@ -4530,7 +4558,7 @@ export default function App() {
         </div>
       </div>
       {viewContent}
-      {shiftModal&&<ShiftModal type={shiftModal} currentShift={currentShift} sales={sales} onSubmit={shiftModal==="open"?openShift:closeShift} onCancel={()=>setShiftModal(null)} />}
+      {shiftModal&&<ShiftModal type={typeof shiftModal==="string"?shiftModal:shiftModal.type} currentShift={typeof shiftModal==="object"&&shiftModal.targetId?shifts.find(x=>x.id===shiftModal.targetId):currentShift} sales={sales} onSubmit={shiftModal==="open"?openShift:(d)=>closeShift({...d,targetId:typeof shiftModal==="object"?shiftModal.targetId:undefined})} onCancel={()=>setShiftModal(null)} />}
     </div>
   );
 }
