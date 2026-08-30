@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.30-1";
+const BUILD_VERSION = "2026.08.30-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -76,6 +76,33 @@ const EXPENSE_CATS = {
   ],
 };
 const COGS_IDS = ["ingredients", "packaging"];
+
+// ============================================================
+// TILL CASH MOVEMENTS
+// ------------------------------------------------------------
+// Money that leaves the drawer for something other than a sale — ice bought
+// mid-shift, a rider paid in cash, or a run to the bank. Without these the
+// expected cash at ປິດກະ can only ever go up, so the count never matches.
+//
+// They are stored as rows in `expenses` (tagged paidFrom:"till" + shiftId)
+// rather than in a table of their own: a spend genuinely IS an expense, and
+// reusing the table means it inherits the existing sync, tombstones and backup.
+//   spend — a real cost: reduces the till AND lands in the month's P&L.
+//   drop  — cash moved to the bank or safe: reduces the till but is NOT a cost,
+//           so it carries type "transfer", which every P&L total ignores.
+const CASH_MOVES = [
+  { id:"spend", type:"variable", icon:"💸", lao:"ຈ່າຍອອກ",  en:"Paid out",  tint:"#dc2626", cost:true },
+  { id:"drop",  type:"transfer", icon:"🏦", lao:"ເກັບເງິນ", en:"Cash drop", tint:"#2563eb", cost:false },
+];
+const moveInfo = (id) => CASH_MOVES.find(m => m.id === id) || CASH_MOVES[0];
+// A row is a till movement only if it was tagged as one — ordinary expenses
+// (paid by transfer, entered in ບັນຊີ) must never affect a shift's cash.
+const isTillMove = (e) => e.paidFrom === "till" && !e.deleted;
+const tillMovesFor = (expenses, shiftId) =>
+  !shiftId ? [] : (expenses||[]).filter(e => isTillMove(e) && e.shiftId === shiftId);
+const moveKind = (e) => e.type === "transfer" ? "drop" : "spend";
+const sumMoves = (moves, kind) =>
+  moves.filter(m => moveKind(m) === kind).reduce((a,m) => a + (Number(m.amount)||0), 0);
 
 
 // ── Backup export ─────────────────────────────────────────────────────
@@ -985,7 +1012,7 @@ function VoidModal({ order, shopInfo, onVoid, onClose }) {
 // ============================================================
 // SHIFT MODAL
 // ============================================================
-function ShiftModal({ type, currentShift, sales, onSubmit, onCancel }) {
+function ShiftModal({ type, currentShift, sales, expenses = [], onSubmit, onCancel }) {
   const [cash, setCash] = useState("");
   const [notes, setNotes] = useState("");
   const shiftSales = currentShift ? sales.filter(s => !s.voided && s.shiftId === currentShift.id) : [];
@@ -994,7 +1021,12 @@ function ShiftModal({ type, currentShift, sales, onSubmit, onCancel }) {
   // Only money that physically reached the drawer is counted as expected cash —
   // QR, transfers and the delivery platforms all settle into a bank account.
   const cashIn = PAYMENTS.filter(m => m.toTill).reduce((a,m) => a + byPay(m.id), 0);
-  const expected = (currentShift?.openingCash||0) + cashIn;
+  // Cash that left the drawer during the shift. Both kinds reduce what should be
+  // in the till; only a spend is a cost, and that distinction lives in the P&L.
+  const moves = tillMovesFor(expenses, currentShift?.id);
+  const spent = sumMoves(moves, "spend");
+  const dropped = sumMoves(moves, "drop");
+  const expected = (currentShift?.openingCash||0) + cashIn - spent - dropped;
   const rows = PAYMENTS.filter(m => !m.toTill && !m.free)
     .map(m => ({ ...m, amt: byPay(m.id) })).filter(r => r.amt > 0);
   // Which bank each transfer landed in — the split the owner reconciles against.
@@ -1034,6 +1066,14 @@ function ShiftModal({ type, currentShift, sales, onSubmit, onCancel }) {
                 <span>└ ຫັກຄ່າຄອມແລ້ວ ຈະໄດ້ຮັບ</span><span>{formatKip(dlPayout)}</span>
               </div>
             )}
+            {CASH_MOVES.map(m => {
+              const amt = m.id==="spend" ? spent : dropped;
+              return amt > 0 ? (
+                <div key={m.id} style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:m.tint }}>
+                  <span>− {m.icon} {m.lao}</span><span>{formatKip(amt)}</span>
+                </div>
+              ) : null;
+            })}
             <div style={{ display:"flex",justifyContent:"space-between",fontWeight:700,borderTop:"1px solid #e5e7eb",paddingTop:6 }}><span>ຄາດວ່າ</span><span>{formatKip(expected)}</span></div>
             <div style={{ fontSize:11,color:"#6b7280",marginTop:4 }}>ນັບສະເພາະເງິນສົດໃນລິ້ນຊັກ</div>
           </div>
@@ -2860,7 +2900,10 @@ function AccountingView({ sales, expenses, masked, onToggleNumbers, onAddExpense
   const revenue=monthSales.reduce((s,o)=>s+orderNet(o),0);
   // Deleted expenses are kept as hidden tombstones so the delete propagates to
   // other devices instead of the row reappearing on the next sync.
-  const monthExp=expenses.filter(e=>e.month===sel&&!e.deleted)
+  // Cash drops move money between the till and the bank; they are logged as
+  // expense rows so they sync, but they are not spending and must not reach the
+  // P&L, the category breakdown or the expense list.
+  const monthExp=expenses.filter(e=>e.month===sel&&!e.deleted&&e.type!=="transfer")
     .sort((a,b)=>String(b.date||"").localeCompare(String(a.date||"")));
   const cogs=monthExp.filter(e=>COGS_IDS.includes(e.category)).reduce((s,e)=>s+e.amount,0);
   const grossProfit=revenue-cogs;
@@ -3773,10 +3816,92 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
 }
 
 // ============================================================
+// CASH MOVE MODAL — money leaving the till mid-shift
+// ============================================================
+// A spend needs a category so it lands in the right place in the P&L; a drop is
+// only a movement between the till and the bank, so it asks for nothing extra.
+function CashMoveModal({ kind, cashier, onSubmit, onCancel }) {
+  const mi = moveInfo(kind);
+  const [amount,setAmount] = useState("");
+  const [what,setWhat] = useState("");
+  const [cat,setCat] = useState("ingredients");
+  const amt = Number(amount)||0;
+  const ok = amt > 0 && what.trim().length > 0;
+  const inp = { width:"100%",padding:"9px 11px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" };
+
+  const submit = () => {
+    if (!ok) return;
+    const now = new Date();
+    const label = CASH_MOVES.find(m=>m.id===kind).en;
+    onSubmit({
+      id: genId(),
+      name: what.trim(),
+      nameLao: kind==="spend" ? (EXPENSE_CATS.variable.find(c=>c.id===cat)?.label || "") : mi.en,
+      // A drop carries type "transfer", which every P&L total skips — it moved
+      // money, it did not spend it.
+      type: mi.type,
+      category: kind==="spend" ? cat : "cash_drop",
+      amount: amt,
+      month: now.toISOString().slice(0,7),
+      date: now.toISOString().slice(0,10),
+      supplier: cashier || null,
+      paidFrom: "till",
+      createdAt: now.toISOString(),
+      deleted: false,
+    });
+  };
+
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16 }}>
+      <div style={{ background:"#fff",borderRadius:16,padding:24,maxWidth:400,width:"100%" }}>
+        <div style={{ fontSize:19,fontWeight:700,marginBottom:4 }}>{mi.icon} {mi.lao} / {mi.en}</div>
+        <div style={{ fontSize:12,color:"#6b7280",marginBottom:16 }}>
+          {kind==="spend"
+            ? "ຫັກອອກຈາກເງິນສົດໃນກະ ແລະ ບັນທຶກເປັນລາຍຈ່າຍ · Reduces till cash and records an expense"
+            : "ຫັກອອກຈາກເງິນສົດໃນກະ ແຕ່ບໍ່ແມ່ນລາຍຈ່າຍ · Reduces till cash, not a cost"}
+        </div>
+
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ຈຳນວນ (₭)</div>
+          <input type="number" inputMode="numeric" autoFocus value={amount} onChange={e=>setAmount(e.target.value)}
+            placeholder="0" style={{ ...inp,fontSize:18,fontWeight:700 }} />
+        </div>
+
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>
+            {kind==="spend" ? "ຊື້ຫຍັງ / ຈ່າຍໃຫ້ໃຜ" : "ໝາຍເຫດ (ເອົາໄປໃສ)"}
+          </div>
+          <input value={what} onChange={e=>setWhat(e.target.value)}
+            placeholder={kind==="spend" ? "ນ້ຳກ້ອນ, ຄ່າລົດສົ່ງ..." : "ເອົາເຂົ້າທະນາຄານ BCEL"} style={inp} />
+        </div>
+
+        {kind==="spend" && (
+          <div style={{ marginBottom:16 }}>
+            <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ໝວດ / Category</div>
+            <select value={cat} onChange={e=>setCat(e.target.value)} style={inp}>
+              {EXPENSE_CATS.variable.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          </div>
+        )}
+
+        <div style={{ display:"flex",gap:8 }}>
+          <button onClick={onCancel} style={{ flex:1,padding:12,background:"#f3f4f6",color:"#374151",border:"none",borderRadius:10,fontWeight:600,cursor:"pointer" }}>ຍົກເລີກ</button>
+          <button onClick={submit} disabled={!ok}
+            style={{ flex:2,padding:12,background:ok?mi.tint:"#e5e7eb",color:ok?"#fff":"#9ca3af",border:"none",borderRadius:10,fontWeight:700,cursor:ok?"pointer":"default" }}>
+            ✓ ບັນທຶກ {amt>0?formatKip(amt):""}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // SHIFT VIEW
 // ============================================================
-function ShiftView({ shifts, sales, currentShift, staleOpen = [], onCloseStale, onOpen, onClose, masked, onToggleNumbers }) {
+function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleOpen = [], onCloseStale, onOpen, onClose, onAddMove, onDeleteMove, masked, onToggleNumbers }) {
   const [expanded,setExpanded]=useState(null);
+  const [moveModal,setMoveModal]=useState(null);   // "spend" | "drop" while recording
   const todayStr=new Date().toISOString().slice(0,10);
   // Today's takings stay visible (the person on duty counts the till against
   // them); anything from an earlier day is hidden unless the owner PIN is given.
@@ -3787,6 +3912,11 @@ function ShiftView({ shifts, sales, currentShift, staleOpen = [], onCloseStale, 
   const [fTo,setFTo]=useState("");
   const [hideEmpty,setHideEmpty]=useState(false);
   const orderNet = (o) => o.items.reduce((s,i)=>s+itemPrice(i)*i.qty,0) - (o.discount||0);
+
+  // Cash that left the drawer this shift, and the same figure per shift for history.
+  const openMoves=tillMovesFor(expenses,currentShift?.id);
+  const openSpent=sumMoves(openMoves,"spend"), openDropped=sumMoves(openMoves,"drop");
+  const movesFor=(id)=>tillMovesFor(expenses,id);
 
   const shiftCashiers=[...new Set(shifts.map(s=>s.cashier).filter(Boolean))].sort();
   const billsIn=(sh)=>sales.filter(s=>!s.voided&&s.payment!=="foc"&&s.shiftId===sh.id).length;
@@ -3815,6 +3945,44 @@ function ShiftView({ shifts, sales, currentShift, staleOpen = [], onCloseStale, 
               <div><div style={{ fontSize:16,fontWeight:700,color:"#16a34a" }}>ກະກຳລັງເປີດ</div><div style={{ fontSize:13,color:"#6b7280" }}>{fmtDT(currentShift.openedAt)} · {currentShift.cashier}</div></div>
             </div>
             <div style={{ background:"#f9f6f0",padding:10,borderRadius:8,marginBottom:14,fontSize:13 }}>💵 ເງິນເລີ່ມ: <b>{formatKip(currentShift.openingCash)}</b></div>
+
+            {/* Cash out of the till. Recorded as it happens by whoever is on duty —
+                otherwise the drawer is short at closing with nothing to explain it. */}
+            <div style={{ border:"1px solid #e5e7eb",borderRadius:10,padding:12,marginBottom:14 }}>
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:openMoves.length?10:0 }}>
+                <div style={{ fontSize:13,fontWeight:700 }}>💸 ເງິນອອກຈາກກະ / Cash out</div>
+                <div style={{ display:"flex",gap:6 }}>
+                  {CASH_MOVES.map(m=>(
+                    <button key={m.id} onClick={()=>setMoveModal(m.id)} style={{ padding:"7px 11px",background:"#fff",color:m.tint,border:`1px solid ${m.tint}55`,borderRadius:8,fontWeight:700,fontSize:12,cursor:"pointer" }}>
+                      {m.icon} {m.lao}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {openMoves.length>0&&(
+                <div style={{ fontSize:12 }}>
+                  {openMoves.map(mv=>{
+                    const mi=moveInfo(moveKind(mv));
+                    return (
+                      <div key={mv.id} style={{ display:"flex",alignItems:"center",gap:8,padding:"5px 0",borderTop:"1px solid #f3f4f6" }}>
+                        <span>{mi.icon}</span>
+                        <div style={{ flex:1,minWidth:0 }}>
+                          <div style={{ fontWeight:600 }}>{mv.name||mi.lao}</div>
+                          <div style={{ fontSize:11,color:"#9ca3af" }}>{fmtTime(mv.createdAt||mv.date)} · {mv.nameLao||mi.en}</div>
+                        </div>
+                        <span style={{ fontWeight:700,color:mi.tint }}>−{formatKip(mv.amount)}</span>
+                        <button onClick={()=>{ if(confirm(`ລຶບ "${mv.name}" ${formatKip(mv.amount)}?`)) onDeleteMove(mv.id); }}
+                          title="ລຶບ / Remove" style={{ padding:"3px 6px",background:"#fee2e2",color:"#dc2626",border:"none",borderRadius:5,cursor:"pointer",fontSize:11 }}>🗑️</button>
+                      </div>
+                    );
+                  })}
+                  <div style={{ display:"flex",justifyContent:"space-between",borderTop:"1px solid #e5e7eb",paddingTop:6,marginTop:4,fontWeight:700 }}>
+                    <span>ລວມອອກ</span><span style={{ color:"#dc2626" }}>−{formatKip(openSpent+openDropped)}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button onClick={onClose} style={{ width:"100%",padding:14,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,fontSize:16,cursor:"pointer" }}>🔒 ປິດກະ</button>
           </>
         ):(
@@ -3825,6 +3993,11 @@ function ShiftView({ shifts, sales, currentShift, staleOpen = [], onCloseStale, 
           </div>
         )}
       </div>
+      {moveModal&&(
+        <CashMoveModal kind={moveModal} cashier={cashier}
+          onCancel={()=>setMoveModal(null)}
+          onSubmit={(row)=>{ onAddMove(row); setMoveModal(null); }} />
+      )}
       {staleOpen.length > 0 && (
         <div style={{ background:"#fffbeb",border:"1px solid #fde68a",borderRadius:12,padding:16,marginBottom:16 }}>
           <div style={{ fontSize:14,fontWeight:700,color:"#b45309",marginBottom:6 }}>
@@ -3885,6 +4058,8 @@ function ShiftView({ shifts, sales, currentShift, staleOpen = [], onCloseStale, 
         const tiles=PAYMENTS.filter(m=>!m.free).map(m=>({ ...m, amt:byPay(m.id) })).filter(t=>t.amt>0);
         const total=tiles.reduce((a,t)=>a+t.amt,0); const open=!sh.closedAt;
         const shFee=ss.filter(s=>payInfo(s.payment).fee).reduce((a,s)=>a+orderFee(s),0);
+        const shMoves=movesFor(sh.id);
+        const shOut=sumMoves(shMoves,"spend")+sumMoves(shMoves,"drop");
         return(
           <div key={sh.id} style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",marginBottom:8,overflow:"hidden" }}>
             <div onClick={()=>setExpanded(expanded===sh.id?null:sh.id)} style={{ padding:"12px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
@@ -3913,6 +4088,17 @@ function ShiftView({ shifts, sales, currentShift, staleOpen = [], onCloseStale, 
                     </div>
                   )}
                   <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ເງິນເລີ່ມ</span><span>{KS(sh,sh.openingCash)}</span></div>
+                  {shOut>0&&(<>
+                    {shMoves.map(mv=>{
+                      const mi=moveInfo(moveKind(mv));
+                      return (
+                        <div key={mv.id} style={{ display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:11,color:"#9ca3af" }}>
+                          <span>{mi.icon} {mv.name||mi.lao}</span><span>−{KS(sh,mv.amount)}</span>
+                        </div>
+                      );
+                    })}
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:"#dc2626" }}><span>ລວມເງິນອອກ</span><span>−{KS(sh,shOut)}</span></div>
+                  </>)}
                   {sh.closedAt&&<>
                     <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ຄາດວ່າ</span><span>{KS(sh,sh.expectedCash||0)}</span></div>
                     <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ນັບໄດ້</span><span style={{ fontWeight:700 }}>{KS(sh,sh.closingCash)}</span></div>
@@ -4510,6 +4696,9 @@ export default function App() {
   const pushShift=(s)=>{ syncShift(s).then(ok=>markPending("pendingShifts",s.id,ok)).catch(()=>markPending("pendingShifts",s.id,false)); };
   const pushExpense=(e)=>{ syncExpense(e).then(ok=>markPending("pendingExpenses",e.id,ok)).catch(()=>markPending("pendingExpenses",e.id,false)); };
   const addExpense=(e)=>{ const u=[...expenses,e]; setExpenses(u); stor.set("expenses",u); pushExpense(e); };
+  // Cash leaving the till. It is an expense row like any other, plus the shift it
+  // must be deducted from at closing.
+  const addCashMove=(row)=>{ if(!currentShift)return; addExpense({ ...row, shiftId: currentShift.id }); };
   // Soft delete: keep a tombstone so the removal reaches the other devices.
   const deleteExpense=(id)=>{ const row=expenses.find(x=>x.id===id); if(!row)return; const t={...row,deleted:true}; const u=expenses.map(x=>x.id===id?t:x); setExpenses(u); stor.set("expenses",u); pushExpense(t); };
 
@@ -4635,7 +4824,7 @@ export default function App() {
         }}>🔔 ຂາຍໃໝ່ / New sale &nbsp;·&nbsp; {saleAlert.text}</div>
       )}
       {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} feeCfg={feeCfg} />}
-      {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} staleOpen={openShifts.slice(1)} onCloseStale={(id)=>setShiftModal({type:"close",targetId:id})} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
+      {view==="shift"&&<ShiftView shifts={shifts} sales={sales} expenses={expenses} cashier={ROLES[role].label} currentShift={currentShift} staleOpen={openShifts.slice(1)} onCloseStale={(id)=>setShiftModal({type:"close",targetId:id})} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} onAddMove={addCashMove} onDeleteMove={deleteExpense} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="dashboard"&&<DashboardView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
@@ -4666,7 +4855,7 @@ export default function App() {
         <UpdateBanner />
         <OfflineBanner />
         {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} feeCfg={feeCfg} />}
-        {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} staleOpen={openShifts.slice(1)} onCloseStale={(id)=>setShiftModal({type:"close",targetId:id})} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
+        {view==="shift"&&<ShiftView shifts={shifts} sales={sales} expenses={expenses} cashier={ROLES[role].label} currentShift={currentShift} staleOpen={openShifts.slice(1)} onCloseStale={(id)=>setShiftModal({type:"close",targetId:id})} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} onAddMove={addCashMove} onDeleteMove={deleteExpense} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="dashboard"&&<DashboardView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="history"&&<SalesHistoryView sales={sales} setSales={setSales} shopInfo={shopInfo} role={role} />}
@@ -4693,7 +4882,7 @@ export default function App() {
           </button>
         ))}
       </div>
-      {shiftModal&&<ShiftModal type={typeof shiftModal==="string"?shiftModal:shiftModal.type} currentShift={typeof shiftModal==="object"&&shiftModal.targetId?shifts.find(x=>x.id===shiftModal.targetId):currentShift} sales={sales} onSubmit={shiftModal==="open"?openShift:(d)=>closeShift({...d,targetId:typeof shiftModal==="object"?shiftModal.targetId:undefined})} onCancel={()=>setShiftModal(null)} />}
+      {shiftModal&&<ShiftModal type={typeof shiftModal==="string"?shiftModal:shiftModal.type} currentShift={typeof shiftModal==="object"&&shiftModal.targetId?shifts.find(x=>x.id===shiftModal.targetId):currentShift} sales={sales} expenses={expenses} onSubmit={shiftModal==="open"?openShift:(d)=>closeShift({...d,targetId:typeof shiftModal==="object"?shiftModal.targetId:undefined})} onCancel={()=>setShiftModal(null)} />}
     </div>
   );
 
@@ -4729,7 +4918,7 @@ export default function App() {
         </div>
       </div>
       {viewContent}
-      {shiftModal&&<ShiftModal type={typeof shiftModal==="string"?shiftModal:shiftModal.type} currentShift={typeof shiftModal==="object"&&shiftModal.targetId?shifts.find(x=>x.id===shiftModal.targetId):currentShift} sales={sales} onSubmit={shiftModal==="open"?openShift:(d)=>closeShift({...d,targetId:typeof shiftModal==="object"?shiftModal.targetId:undefined})} onCancel={()=>setShiftModal(null)} />}
+      {shiftModal&&<ShiftModal type={typeof shiftModal==="string"?shiftModal:shiftModal.type} currentShift={typeof shiftModal==="object"&&shiftModal.targetId?shifts.find(x=>x.id===shiftModal.targetId):currentShift} sales={sales} expenses={expenses} onSubmit={shiftModal==="open"?openShift:(d)=>closeShift({...d,targetId:typeof shiftModal==="object"?shiftModal.targetId:undefined})} onCancel={()=>setShiftModal(null)} />}
     </div>
   );
 }
