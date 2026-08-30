@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.29-1";
+const BUILD_VERSION = "2026.08.30-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -83,7 +83,7 @@ const COGS_IDS = ["ingredients", "packaging"];
 // straight from localStorage, which is this device's source of truth and holds
 // everything even when the cloud is unreachable.
 const BACKUP_KEYS = ["sales","shifts","expenses","staff","attendance","recipes",
-                     "menu","categories","addons","shopInfo","staffCfg","costCfg","parked"];
+                     "menu","categories","addons","shopInfo","staffCfg","costCfg","feeCfg","parked"];
 
 function saveFile(filename, text, mime) {
   try {
@@ -115,11 +115,13 @@ function exportBackup() {
 /** Sales and expenses as CSV, for a spreadsheet or the accountant. */
 function exportSalesCsv() {
   const sales = (stor.get("sales", []) || []).filter(s => !s.deleted);
-  const head = ["date","bill_id","cashier","payment","voided","items","qty","discount","total","net"];
+  const head = ["date","bill_id","cashier","payment","bank","fee_pct","fee","payout","voided","items","qty","discount","total","net"];
   const rows = sales.map(s => {
     const qty = (s.items||[]).reduce((a,i)=>a+(Number(i.qty)||0),0);
     const gross = (s.items||[]).reduce((a,i)=>a+itemPrice(i)*(Number(i.qty)||0),0);
-    return [ s.date, s.id, s.cashier, s.payment, s.voided ? "VOID" : "",
+    return [ s.date, s.id, s.cashier, s.payment, s.bank||"", s.feePct??"",
+             s.feePct ? orderFee(s) : "", s.feePct ? orderPayout(s) : "",
+             s.voided ? "VOID" : "",
              (s.items||[]).map(i=>`${i.name} x${i.qty}`).join("; "),
              qty, s.discount||0, gross, gross-(s.discount||0) ].map(csvCell).join(",");
   });
@@ -227,6 +229,37 @@ const PAY_TYPES = [
   { id: "hourly",  label: "ລາຍຊົ່ວໂມງ / Hourly" },
 ];
 const STAFF_CFG_DEFAULT = { workDays: 26 }; // paid days in a standard month
+
+// ============================================================
+// PAYMENT METHODS — single source of truth
+// ------------------------------------------------------------
+// Every screen that shows, filters, totals or prints a payment reads this list,
+// so a method added here appears in POS, receipts, the shift close, history and
+// the reports without those screens needing to know it exists.
+//   toTill — the money physically lands in the drawer, so it counts towards the
+//            expected cash at closing. Only cash does.
+//   bank   — the cashier records which account received it (eases shift checking).
+//   fee    — a delivery platform keeps a commission and settles with the shop later.
+//   free   — no money changes hands (FOC); excluded from revenue everywhere.
+const PAYMENTS = [
+  { id:"cash",      icon:"💵", lao:"ສົດ",  full:"ເງິນສົດ",      en:"Cash",      tint:"#16a34a", bg:"#dcfce7", toTill:true },
+  { id:"qr",        icon:"📲", lao:"QR",    full:"QR Code",   en:"QR",        tint:"#7c3aed", bg:"#ede9fe" },
+  { id:"transfer",  icon:"🏦", lao:"ໂອນ",  full:"ໂອນ",      en:"Transfer",  tint:"#2563eb", bg:"#dbeafe", bank:true },
+  { id:"foodpanda", icon:"🐼", lao:"Panda", full:"foodpanda", en:"foodpanda", tint:"#db2777", bg:"#fce7f3", fee:true },
+  { id:"eget",      icon:"🛵", lao:"eGet",  full:"eGet",      en:"eGet",      tint:"#ea580c", bg:"#ffedd5", fee:true },
+  { id:"foc",       icon:"🎁", lao:"FOC",   full:"FOC",       en:"FOC",       tint:"#16a34a", bg:"#dcfce7", free:true },
+];
+const payInfo = (id) => PAYMENTS.find(p => p.id === id) || PAYMENTS[0];
+const BANKS = ["BCEL", "LDB"];
+
+// Commission each platform keeps, in %. Owner-editable in Admin and cloud-synced
+// like every other setting. The rate in force is copied onto the sale at checkout,
+// so changing it later never rewrites the history of past orders.
+const FEE_CFG_DEFAULT = { foodpanda: 20, eget: 20 };
+// What the platform keeps on one order, and what the shop will actually be paid.
+// feePct is the sale's own stored rate — null on everything that isn't delivery.
+const orderFee = (o) => Math.round(((o.total||0) - (o.discount||0)) * (Number(o.feePct)||0) / 100);
+const orderPayout = (o) => ((o.total||0) - (o.discount||0)) - orderFee(o);
 
 /** Wage for one person in one month. Returns the breakdown the UI shows and the
  *  final amount. Exceptions are the only attendance rows that exist, so a person
@@ -434,8 +467,10 @@ function receiptText(order, shopInfo) {
   const center = (s = "") => { s = String(s); if (s.length >= cols) return s.slice(0, cols); return " ".repeat(Math.floor((cols - s.length) / 2)) + s; };
   const lr = (l = "", r = "") => { l = String(l); r = String(r); const sp = cols - l.length - r.length; return sp > 0 ? l + " ".repeat(sp) + r : (l + " " + r); };
   const net = order.total - (order.discount || 0);
-  const isFOC = order.payment === "foc";
-  const payLabel = order.payment === "cash" ? "Cash" : order.payment === "qr" ? "QR" : order.payment === "transfer" ? "Transfer" : "FOC";
+  const isFOC = !!payInfo(order.payment).free;
+  // Latin label for the thermal font, with the bank appended so a transfer bill
+  // can be matched against the right statement later.
+  const payLabel = payInfo(order.payment).en + (order.bank ? ` (${order.bank})` : "");
   const dbl = "=".repeat(cols);
   // Direct-mode amounts use a plain ASCII "LAK" — the thermal printer's built-in
   // font has no ₭ (U+20AD) glyph, so formatKip's symbol would print as garbage.
@@ -524,8 +559,8 @@ function printReceipt(order, shopInfo) {
       <td style="text-align:right;padding:2px 0">ລວມ / Amount</td>
     </tr>`;
 
-  const payLabel = order.payment === "cash" ? "ເງິນສົດ" : order.payment === "qr" ? "QR Code" : order.payment === "transfer" ? "ໂອນ" : "FOC";
-  const isFOC = order.payment === "foc";
+  const payLabel = payInfo(order.payment).full + (order.bank ? ` · ${order.bank}` : "");
+  const isFOC = !!payInfo(order.payment).free;
   const esc = (s) => String(s).replace(/[&<>]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;" }[c]));
   // Remark / customer details — printed as a prominent boxed block (so the rider
   // can read the customer name, phone and address at a glance). Preserves line breaks.
@@ -809,8 +844,9 @@ function AddonModal({ item, addons, onConfirm, onCancel }) {
 // ============================================================
 function ReceiptModal({ order, shopInfo, onClose, onSaveRemark }) {
   const net = order.total - (order.discount || 0);
-  const isFOC = order.payment === "foc";
-  const payLabel = order.payment === "cash" ? "💵 ເງິນສົດ" : order.payment === "qr" ? "📲 QR" : order.payment === "transfer" ? "🏦 ໂອນ" : "🎁 FOC";
+  const isFOC = !!payInfo(order.payment).free;
+  const payLabel = `${payInfo(order.payment).icon} ${payInfo(order.payment).full}`
+    + (order.bank ? ` · ${order.bank}` : "");
   const [remark, setRemark] = useState(order.note || "");
   const doPrint = () => {
     const o = { ...order, note: remark.trim() };
@@ -953,10 +989,23 @@ function ShiftModal({ type, currentShift, sales, onSubmit, onCancel }) {
   const [cash, setCash] = useState("");
   const [notes, setNotes] = useState("");
   const shiftSales = currentShift ? sales.filter(s => !s.voided && s.shiftId === currentShift.id) : [];
-  const cashIn = shiftSales.filter(s=>s.payment==="cash").reduce((a,s)=>a+(s.total-(s.discount||0)),0);
+  const net = (o) => (o.total||0) - (o.discount||0);
+  const byPay = (id) => shiftSales.filter(o => o.payment === id).reduce((a,o) => a + net(o), 0);
+  // Only money that physically reached the drawer is counted as expected cash —
+  // QR, transfers and the delivery platforms all settle into a bank account.
+  const cashIn = PAYMENTS.filter(m => m.toTill).reduce((a,m) => a + byPay(m.id), 0);
   const expected = (currentShift?.openingCash||0) + cashIn;
-  const qrR = shiftSales.filter(s=>s.payment==="qr").reduce((a,s)=>a+(s.total-(s.discount||0)),0);
-  const tfR = shiftSales.filter(s=>s.payment==="transfer").reduce((a,s)=>a+(s.total-(s.discount||0)),0);
+  const rows = PAYMENTS.filter(m => !m.toTill && !m.free)
+    .map(m => ({ ...m, amt: byPay(m.id) })).filter(r => r.amt > 0);
+  // Which bank each transfer landed in — the split the owner reconciles against.
+  const banks = BANKS.map(b => ({
+    b, amt: shiftSales.filter(o => o.bank === b).reduce((a,o) => a + net(o), 0),
+  })).filter(x => x.amt > 0);
+  // Delivery bills are rung up at the full price the customer paid; the platform
+  // keeps its cut and pays the rest later, so show what is actually owed to the shop.
+  const dl = shiftSales.filter(o => payInfo(o.payment).fee);
+  const dlGross = dl.reduce((a,o) => a + net(o), 0);
+  const dlPayout = dl.reduce((a,o) => a + orderPayout(o), 0);
 
   return (
     <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000 }}>
@@ -966,9 +1015,27 @@ function ShiftModal({ type, currentShift, sales, onSubmit, onCancel }) {
           <div style={{ background:"#f9f6f0",padding:12,borderRadius:10,marginBottom:12,fontSize:13 }}>
             <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ເງິນເລີ່ມ</span><span>{formatKip(currentShift.openingCash)}</span></div>
             <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:"#16a34a" }}><span>+ ສົດ</span><span>{formatKip(cashIn)}</span></div>
-            <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:"#7c3aed" }}><span>QR</span><span>{formatKip(qrR)}</span></div>
-            <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:"#2563eb" }}><span>ໂອນ</span><span>{formatKip(tfR)}</span></div>
+            {rows.map(r => (
+              <div key={r.id} style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:r.tint }}>
+                <span>{r.icon} {r.full}</span><span>{formatKip(r.amt)}</span>
+              </div>
+            ))}
+            {banks.length > 0 && (
+              <div style={{ marginTop:2,marginBottom:4,paddingLeft:10,fontSize:12,color:"#6b7280" }}>
+                {banks.map(x => (
+                  <div key={x.b} style={{ display:"flex",justifyContent:"space-between" }}>
+                    <span>└ {x.b}</span><span>{formatKip(x.amt)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {dlGross > 0 && (
+              <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,fontSize:12,color:"#6b7280" }}>
+                <span>└ ຫັກຄ່າຄອມແລ້ວ ຈະໄດ້ຮັບ</span><span>{formatKip(dlPayout)}</span>
+              </div>
+            )}
             <div style={{ display:"flex",justifyContent:"space-between",fontWeight:700,borderTop:"1px solid #e5e7eb",paddingTop:6 }}><span>ຄາດວ່າ</span><span>{formatKip(expected)}</span></div>
+            <div style={{ fontSize:11,color:"#6b7280",marginTop:4 }}>ນັບສະເພາະເງິນສົດໃນລິ້ນຊັກ</div>
           </div>
         )}
         <div style={{ marginBottom:12 }}>
@@ -1020,7 +1087,7 @@ function ParkModal({ onConfirm, onCancel }) {
 // ============================================================
 // POS VIEW with parked orders & add-ons
 // ============================================================
-function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift, cashier, qrImage, shopInfo, parkedOrders, setParkedOrders, mode }) {
+function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift, cashier, qrImage, shopInfo, parkedOrders, setParkedOrders, mode, feeCfg }) {
   const isMobile = mode === "phone";
   // In-progress order ("order log") is persisted to localStorage so it survives
   // switching to another tab/module and accidental page refreshes.
@@ -1029,6 +1096,7 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
   const [cart, setCart] = useState(draft.cart || []);
   const [search, setSearch] = useState("");
   const [payment, setPayment] = useState("cash");
+  const [bank, setBank] = useState(BANKS[0]);   // which account a transfer landed in
   const [received, setReceived] = useState("");
   const [discount, setDiscount] = useState(draft.discount || 0);
   const [note, setNote] = useState(draft.note || "");
@@ -1104,12 +1172,78 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
   const subtotal = cart.reduce((s,c) => s + itemPrice(c) * c.qty, 0);
   const total = Math.max(0, subtotal - discount);
   const change = payment==="cash" && received ? Number(received) - total : 0;
+  const pay = payInfo(payment);
+  // A delivery platform keeps a cut of the bill: the customer still pays the full
+  // total, and the shop banks the remainder when the platform settles.
+  const fees = { ...FEE_CFG_DEFAULT, ...(feeCfg||{}) };
+  const feePct = pay.fee ? (Number(fees[payment]) || 0) : null;
+  const feeAmt = feePct ? Math.round(total * feePct / 100) : 0;
+  const payout = total - feeAmt;
 
   const clearCart = () => {
     setCart([]); setDiscount(0); setReceived(""); setNote(""); setFocReason("");
     setShowCheckout(false); setShowQR(false); setParkedId(null); setParkedName("");
-    setPayment("cash");
+    setPayment("cash"); setBank(BANKS[0]);
   };
+
+  // The payment chooser and the extra field each method needs are identical in the
+  // desktop panel and the mobile sheet. They are plain functions called inline —
+  // NOT components — so React reuses the same elements between renders and the
+  // inputs inside never lose focus mid-typing.
+  const payPicker = () => (
+    <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:6,marginBottom:10 }}>
+      {PAYMENTS.map(o => (
+        <button key={o.id} onClick={()=>setPayment(o.id)} style={{
+          padding:"8px 4px",borderRadius:8,border:payment===o.id?"2px solid #1a1a2e":"1px solid #e5e7eb",
+          background:payment===o.id?"#1a1a2e":"#fff",color:payment===o.id?"#f4d03f":"#374151",
+          fontWeight:payment===o.id?700:500,cursor:"pointer",fontSize:12,lineHeight:1.25
+        }}><div style={{ fontSize:16 }}>{o.icon}</div>{o.lao}</button>
+      ))}
+    </div>
+  );
+
+  const payExtra = () => (<>
+    {payment==="cash" && (
+      <div style={{ marginBottom:10 }}>
+        <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ຮັບເງິນ (₭)</div>
+        <input type="number" placeholder="ໃສ່ຈຳນວນ" value={received} onChange={e=>setReceived(e.target.value)}
+          style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" }} />
+        {received && <div style={{ fontSize:13,marginTop:4,color:"#16a34a",fontWeight:600 }}>ທອນ: {formatKip(Math.max(0,change))}</div>}
+      </div>
+    )}
+    {pay.bank && (
+      <div style={{ marginBottom:10 }}>
+        <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ເຂົ້າບັນຊີ / Bank</div>
+        <div style={{ display:"grid",gridTemplateColumns:`repeat(${BANKS.length},1fr)`,gap:6 }}>
+          {BANKS.map(b => (
+            <button key={b} onClick={()=>setBank(b)} style={{
+              padding:"9px 4px",borderRadius:8,border:bank===b?"2px solid #2563eb":"1px solid #e5e7eb",
+              background:bank===b?"#dbeafe":"#fff",color:bank===b?"#1d4ed8":"#374151",
+              fontWeight:bank===b?700:500,cursor:"pointer",fontSize:13
+            }}>🏦 {b}</button>
+          ))}
+        </div>
+      </div>
+    )}
+    {pay.fee && (
+      <div style={{ background:pay.bg,border:`1px solid ${pay.tint}55`,borderRadius:8,padding:10,marginBottom:10,fontSize:12 }}>
+        <div style={{ fontWeight:700,color:pay.tint,marginBottom:5 }}>{pay.icon} {pay.full} — ຄ່າຄອມ {feePct}%</div>
+        <div style={{ display:"flex",justifyContent:"space-between",marginBottom:2 }}><span>ລູກຄ້າຈ່າຍ</span><span>{formatKip(total)}</span></div>
+        <div style={{ display:"flex",justifyContent:"space-between",marginBottom:4,color:"#b91c1c" }}><span>− ຄ່າຄອມ {feePct}%</span><span>{formatKip(feeAmt)}</span></div>
+        <div style={{ display:"flex",justifyContent:"space-between",fontWeight:700,borderTop:`1px solid ${pay.tint}55`,paddingTop:4 }}>
+          <span>ຮ້ານຈະໄດ້ຮັບ</span><span>{formatKip(payout)}</span>
+        </div>
+        <div style={{ marginTop:5,color:"#6b7280" }}>ບໍ່ເຂົ້າເງິນສົດໃນກະ — ຈະໂອນໃຫ້ພາຍຫຼັງ</div>
+      </div>
+    )}
+    {pay.free && (
+      <div style={{ background:"#dcfce7",border:"1px solid #86efac",borderRadius:8,padding:10,marginBottom:10,fontSize:12 }}>
+        🎁 <b>FOC</b> — ບັນທຶກເປັນ 0 ₭<br/>
+        <input value={focReason} onChange={e=>setFocReason(e.target.value)} placeholder="ເຫດຜົນ (ບໍ່ບັງຄັບ)"
+          style={{ width:"100%",padding:"6px 8px",marginTop:6,borderRadius:6,border:"1px solid #86efac",fontSize:12,boxSizing:"border-box" }} />
+      </div>
+    )}
+  </>);
 
   const finalize = (pmtOverride) => {
     const p = pmtOverride || payment;
@@ -1119,6 +1253,10 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
       items: cart.map(({ image, ...c }) => c), total: subtotal, discount, payment: p, // never store menu photos in a bill
       received: p==="cash" ? Number(received) : null,
       note: p==="foc" ? (focReason || "FOC") : note,
+      bank: payInfo(p).bank ? bank : null,
+      // The rate is copied onto the sale, so editing the % later leaves every past
+      // order reading exactly as it did on the day it was rung up.
+      feePct: payInfo(p).fee ? (Number(fees[p]) || 0) : null,
       cashier, shiftId: currentShift?.id, voided: false,
       parkedName: parkedName || null,
     };
@@ -1339,39 +1477,17 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
               <input type="number" placeholder="0" value={discount||""} onChange={e=>setDiscount(Number(e.target.value))}
                 style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" }} />
             </div>
-            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:10 }}>
-              {[["cash","💵","ສົດ"],["qr","📲","QR"],["transfer","🏦","ໂອນ"],["foc","🎁","FOC"]].map(([v,ic,l]) => (
-                <button key={v} onClick={()=>setPayment(v)} style={{
-                  padding:"8px 4px",borderRadius:8,border:payment===v?"2px solid #1a1a2e":"1px solid #e5e7eb",
-                  background:payment===v?"#1a1a2e":"#fff",color:payment===v?"#f4d03f":"#374151",
-                  fontWeight:payment===v?700:500,cursor:"pointer",fontSize:12
-                }}><div style={{ fontSize:16 }}>{ic}</div>{l}</button>
-              ))}
-            </div>
-            {payment==="cash" && (
-              <div style={{ marginBottom:10 }}>
-                <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ຮັບເງິນ (₭)</div>
-                <input type="number" placeholder="ໃສ່ຈຳນວນ" value={received} onChange={e=>setReceived(e.target.value)}
-                  style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" }} />
-                {received && <div style={{ fontSize:13,marginTop:4,color:"#16a34a",fontWeight:600 }}>ທອນ: {formatKip(Math.max(0,change))}</div>}
-              </div>
-            )}
-            {payment==="foc" && (
-              <div style={{ background:"#dcfce7",border:"1px solid #86efac",borderRadius:8,padding:10,marginBottom:10,fontSize:12 }}>
-                🎁 <b>FOC</b> — ບັນທຶກເປັນ 0 ₭<br/>
-                <input value={focReason} onChange={e=>setFocReason(e.target.value)} placeholder="ເຫດຜົນ (ບໍ່ບັງຄັບ)"
-                  style={{ width:"100%",padding:"6px 8px",marginTop:6,borderRadius:6,border:"1px solid #86efac",fontSize:12,boxSizing:"border-box" }} />
-              </div>
-            )}
+            {payPicker()}
+            {payExtra()}
             <input placeholder="ໝາຍເຫດ..." value={note} onChange={e=>setNote(e.target.value)}
               style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,marginBottom:10,boxSizing:"border-box" }} />
             <div style={{ display:"flex",justifyContent:"space-between",fontWeight:700,fontSize:18,marginBottom:10 }}>
               <span>ທັງໝົດ</span>
-              <span style={{ color:payment==="foc"?"#16a34a":"#7c3aed" }}>{payment==="foc"?"FOC ★":formatKip(total)}</span>
+              <span style={{ color:pay.free?"#16a34a":"#7c3aed" }}>{pay.free?"FOC ★":formatKip(total)}</span>
             </div>
             <button onClick={checkout} disabled={payment==="cash" && (!received||Number(received)<total)}
               style={{ width:"100%",padding:13,background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,fontSize:15,cursor:"pointer",opacity:(payment==="cash"&&(!received||Number(received)<total))?0.5:1 }}>
-              {payment==="qr"?"📲 ສ້າງ QR":payment==="foc"?"🎁 ຢືນຢັນ FOC":"✅ ຢືນຢັນ"}
+              {payment==="qr"?"📲 ສ້າງ QR":pay.free?"🎁 ຢືນຢັນ FOC":"✅ ຢືນຢັນ"}
             </button>
             <button onClick={()=>setShowCheckout(false)} style={{ width:"100%",padding:8,background:"transparent",color:"#6b7280",border:"none",fontSize:13,cursor:"pointer",marginTop:6 }}>← ກັບໄປ</button>
           </div>
@@ -1444,39 +1560,17 @@ function POSView({ menu, categories, addons, onSale, onUpdateSale, currentShift,
                   <input type="number" placeholder="0" value={discount||""} onChange={e=>setDiscount(Number(e.target.value))}
                     style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" }} />
                 </div>
-                <div className="grid-responsive payment-grid" style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:10 }}>
-                  {[["cash","💵","ສົດ"],["qr","📲","QR"],["transfer","🏦","ໂອນ"],["foc","🎁","FOC"]].map(([v,ic,l]) => (
-                    <button key={v} onClick={()=>setPayment(v)} style={{
-                      padding:"8px 4px",borderRadius:8,border:payment===v?"2px solid #1a1a2e":"1px solid #e5e7eb",
-                      background:payment===v?"#1a1a2e":"#fff",color:payment===v?"#f4d03f":"#374151",
-                      fontWeight:payment===v?700:500,cursor:"pointer",fontSize:12
-                    }}><div style={{ fontSize:16 }}>{ic}</div>{l}</button>
-                  ))}
-                </div>
-                {payment==="cash" && (
-                  <div style={{ marginBottom:10 }}>
-                    <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>ຮັບເງິນ (₭)</div>
-                    <input type="number" placeholder="ໃສ່ຈຳນວນ" value={received} onChange={e=>setReceived(e.target.value)}
-                      style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box" }} />
-                    {received && <div style={{ fontSize:13,marginTop:4,color:"#16a34a",fontWeight:600 }}>ທອນ: {formatKip(Math.max(0,change))}</div>}
-                  </div>
-                )}
-                {payment==="foc" && (
-                  <div style={{ background:"#dcfce7",border:"1px solid #86efac",borderRadius:8,padding:10,marginBottom:10,fontSize:12 }}>
-                    🎁 <b>FOC</b> — ບັນທຶກເປັນ 0 ₭<br/>
-                    <input value={focReason} onChange={e=>setFocReason(e.target.value)} placeholder="ເຫດຜົນ (ບໍ່ບັງຄັບ)"
-                      style={{ width:"100%",padding:"6px 8px",marginTop:6,borderRadius:6,border:"1px solid #86efac",fontSize:12,boxSizing:"border-box" }} />
-                  </div>
-                )}
+                {payPicker()}
+                {payExtra()}
                 <input placeholder="ໝາຍເຫດ..." value={note} onChange={e=>setNote(e.target.value)}
                   style={{ width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,marginBottom:10,boxSizing:"border-box" }} />
                 <div style={{ display:"flex",justifyContent:"space-between",fontWeight:700,fontSize:18,marginBottom:10 }}>
                   <span>ທັງໝົດ</span>
-                  <span style={{ color:payment==="foc"?"#16a34a":"#7c3aed" }}>{payment==="foc"?"FOC ★":formatKip(total)}</span>
+                  <span style={{ color:pay.free?"#16a34a":"#7c3aed" }}>{pay.free?"FOC ★":formatKip(total)}</span>
                 </div>
                 <button onClick={checkout} disabled={payment==="cash" && (!received||Number(received)<total)}
                   style={{ width:"100%",padding:13,background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,fontSize:15,cursor:"pointer",opacity:(payment==="cash"&&(!received||Number(received)<total))?0.5:1 }}>
-                  {payment==="qr"?"📲 ສ້າງ QR":payment==="foc"?"🎁 ຢືນຢັນ FOC":"✅ ຢືນຢັນ"}
+                  {payment==="qr"?"📲 ສ້າງ QR":pay.free?"🎁 ຢືນຢັນ FOC":"✅ ຢືນຢັນ"}
                 </button>
                 <button onClick={()=>setShowCheckout(false)} style={{ width:"100%",padding:8,background:"transparent",color:"#6b7280",border:"none",fontSize:13,cursor:"pointer",marginTop:6 }}>← ກັບໄປ</button>
               </div>
@@ -1706,9 +1800,18 @@ function DashboardView({ sales, masked, onToggleNumbers }) {
   const totalRevenue = filtered.reduce((s,o) => s + orderNet(o), 0);
   const totalOrders  = filtered.length;
   const avg          = totalOrders > 0 ? totalRevenue / totalOrders : 0;
-  const cashSales    = filtered.filter(o=>o.payment==="cash").reduce((s,o)=>s+orderNet(o),0);
-  const qrSales      = filtered.filter(o=>o.payment==="qr").reduce((s,o)=>s+orderNet(o),0);
-  const transferSales= filtered.filter(o=>o.payment==="transfer").reduce((s,o)=>s+orderNet(o),0);
+  const byPay        = (id) => filtered.filter(o=>o.payment===id).reduce((s,o)=>s+orderNet(o),0);
+  const cashSales    = byPay("cash");
+  const qrSales      = byPay("qr");
+  const transferSales= byPay("transfer");
+  // Delivery bills are recorded at the price the customer paid. The platform keeps
+  // its commission, so revenue and the amount actually banked differ — show both.
+  const dlSales   = filtered.filter(o=>payInfo(o.payment).fee);
+  const dlGross   = dlSales.reduce((s,o)=>s+orderNet(o),0);
+  const dlFee     = dlSales.reduce((s,o)=>s+orderFee(o),0);
+  const dlPayout  = dlGross - dlFee;
+  // Revenue less what the platforms keep: the cash the shop will really see.
+  const netRevenue = totalRevenue - dlFee;
   const focCount = sales.filter(s => {
     if (s.deleted || s.payment !== "foc") return false;
     const d = new Date(s.date);
@@ -1804,7 +1907,7 @@ function DashboardView({ sales, masked, onToggleNumbers }) {
           ["📈","ສະເລ່ຍ",K(avg),"#2563eb"],
           ["💵","ສົດ",K(cashSales),"#ea580c"],
           ["📲","QR",K(qrSales),"#7c3aed"],
-          ["🎁","FOC",focCount+" ໃບ","#6b7280"],
+          ...(dlFee>0 ? [["🛵","ຫຼັງຫັກຄ່າຄອມ",K(netRevenue),"#db2777"]] : [["🎁","FOC",focCount+" ໃບ","#6b7280"]]),
         ].map(([ic,l,v,c]) => (
           <div key={l} style={{ background:"#fff", borderRadius:12, padding:14, border:"1px solid #e5e7eb" }}>
             <div style={{ fontSize:20 }}>{ic}</div>
@@ -1892,12 +1995,9 @@ function DashboardView({ sales, masked, onToggleNumbers }) {
       {/* Payment Breakdown */}
       <div style={{ background:"#fff", borderRadius:12, padding:16, border:"1px solid #e5e7eb", marginBottom:16 }}>
         <div style={{ fontSize:14, fontWeight:600, marginBottom:14 }}>💳 ວິທີຊຳລະ</div>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10 }}>
-          {[
-            { label:"💵 ສົດ", value:cashSales, color:"#16a34a" },
-            { label:"📲 QR", value:qrSales, color:"#7c3aed" },
-            { label:"🏦 ໂອນ", value:transferSales, color:"#2563eb" },
-          ].map(m => {
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(100px,1fr))", gap:10 }}>
+          {PAYMENTS.filter(m=>!m.free).map(m => ({ label:`${m.icon} ${m.lao}`, value:byPay(m.id), color:m.tint }))
+            .filter(m=>m.value>0).map(m => {
             const pct = totalRevenue > 0 ? (m.value / totalRevenue * 100) : 0;
             return (
               <div key={m.label} style={{ textAlign:"center", padding:10 }}>
@@ -1911,6 +2011,19 @@ function DashboardView({ sales, masked, onToggleNumbers }) {
             );
           })}
         </div>
+        {dlFee > 0 && (
+          <div style={{ marginTop:14, paddingTop:12, borderTop:"1px solid #f3f4f6", fontSize:13 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+              <span style={{ color:"#6b7280" }}>🛵 ຂາຍຜ່ານແອັບສົ່ງ / Delivery</span><span>{K(dlGross)}</span>
+            </div>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4, color:"#b91c1c" }}>
+              <span>− ຄ່າຄອມ / Commission</span><span>{K(dlFee)}</span>
+            </div>
+            <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700 }}>
+              <span>ຮ້ານຈະໄດ້ຮັບ / Payout</span><span>{K(dlPayout)}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* AI Analysis */}
@@ -2753,7 +2866,11 @@ function AccountingView({ sales, expenses, masked, onToggleNumbers, onAddExpense
   const grossProfit=revenue-cogs;
   const fixedTotal=monthExp.filter(e=>e.type==="fixed").reduce((s,e)=>s+e.amount,0);
   const varNonCogs=monthExp.filter(e=>e.type==="variable"&&!COGS_IDS.includes(e.category)).reduce((s,e)=>s+e.amount,0);
-  const netIncome=grossProfit-fixedTotal-varNonCogs;
+  // Commission the delivery apps kept. It is a real selling cost, but it never
+  // passes through the expense sheet — it is deducted from the payout — so it is
+  // computed from the bills rather than keyed in by hand.
+  const dlCommission=monthSales.filter(o=>payInfo(o.payment).fee).reduce((s,o)=>s+orderFee(o),0);
+  const netIncome=grossProfit-fixedTotal-varNonCogs-dlCommission;
   const gm=revenue>0?(grossProfit/revenue*100):0;
   const nm=revenue>0?(netIncome/revenue*100):0;
   const byCat={};
@@ -2779,6 +2896,7 @@ function AccountingView({ sales, expenses, masked, onToggleNumbers, onAddExpense
           {label:"= ກຳໄລຂັ້ນຕົ້ນ",val:grossProfit,color:"#0891b2",bold:true,extra:`${gm.toFixed(1)}%`,sep:true},
           {label:"− ຄ່າໃຊ້ຈ່າຍຄົງທີ່",val:fixedTotal,color:"#dc2626",indent:16},
           {label:"− ຄ່າໃຊ້ຈ່າຍແປຜັນອື່ນ",val:varNonCogs,color:"#dc2626",indent:16},
+          ...(dlCommission>0?[{label:"− ຄ່າຄອມແອັບສົ່ງ",val:dlCommission,color:"#dc2626",indent:16}]:[]),
           {label:"= ກຳໄລສຸດທິ",val:netIncome,color:netIncome>=0?"#7c3aed":"#dc2626",big:true,extra:`${nm.toFixed(1)}%`,sep2:true},
         ].map((r,i)=>(
           <div key={i} style={{ display:"flex",justifyContent:"space-between",padding:r.big?"14px 0":"7px 0",borderTop:r.big?"2px solid #1a1a2e":r.sep||r.sep2?"1px solid #d1d5db":"1px solid #f3f4f6",paddingLeft:r.indent||0 }}>
@@ -2936,7 +3054,7 @@ function SalesHistoryView({ sales, setSales, shopInfo, role }) {
   }).sort((a,b)=> sortDir==="asc" ? new Date(a.date)-new Date(b.date) : new Date(b.date)-new Date(a.date));
   const filtered=filteredAll.slice(0,150); // cap the on-screen list; print uses the full set
 
-  const STATUS_CHIPS=[["all","ທັງໝົດ"],["cash","💵 ສົດ"],["qr","📲 QR"],["transfer","🏦 ໂອນ"],["foc","🎁 FOC"],["void","🚫 ຍົກເລີກ"]];
+  const STATUS_CHIPS=[["all","ທັງໝົດ"],...PAYMENTS.map(m=>[m.id,`${m.icon} ${m.lao}`]),["void","🚫 ຍົກເລີກ"]];
 
   // Force a full re-sync now: pull the complete cloud set (reset cursor) and re-push
   // anything still waiting to upload. (Data is ALWAYS saved locally the instant a
@@ -2961,24 +3079,28 @@ function SalesHistoryView({ sales, setSales, shopInfo, role }) {
     const net=(s)=>s.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0)-(s.discount||0);
     const rows=filteredAll.map(s=>{          // in the same order as on screen (sort toggle)
       const items=s.items.map(it=>`${esc(it.name)}×${it.qty}`).join(", ");
-      const pay=s.payment==="cash"?"ສົດ":s.payment==="qr"?"QR":s.payment==="transfer"?"ໂອນ":"FOC";
+      const pay=payInfo(s.payment).lao+(s.bank?` ${s.bank}`:"");
       return `<tr${s.voided?' style="color:#b91c1c"':''}><td>${fmtDT(s.date)}</td><td>#${esc(s.id.toUpperCase())}${s.voided?" (VOID)":""}</td><td>${esc(s.cashier||"—")}</td><td>${items}</td><td>${esc((s.note||"").replace(/\n/g," / "))}</td><td>${pay}</td><td class="num">${s.voided?"—":formatKip(net(s))}</td></tr>`;
     }).join("");
     // Categorise by payment type
     const nonVoid=filteredAll.filter(s=>!s.voided);
     const grp=(p)=>{ const a=nonVoid.filter(s=>s.payment===p); return {n:a.length,sum:a.reduce((x,s)=>x+net(s),0)}; };
-    const cash=grp("cash"),qr=grp("qr"),tr=grp("transfer"),foc=grp("foc");
+    const foc=grp("foc");
+    const payRows=PAYMENTS.filter(m=>!m.free).map(m=>({ ...m, ...grp(m.id) }));
+    // The platforms' cut, so the printed sheet says what will actually be banked.
+    const feeSum=nonVoid.filter(x=>payInfo(x.payment).fee).reduce((a,x)=>a+orderFee(x),0);
     const voidN=filteredAll.filter(s=>s.voided).length;
-    const totalRev=cash.sum+qr.sum+tr.sum; // excludes FOC + void
+    const totalRev=payRows.reduce((a,r)=>a+r.sum,0); // excludes FOC + void
+    const totalN=payRows.reduce((a,r)=>a+r.n,0);
     const html=`<h1>ປະຫວັດການຂາຍ / Sales History</h1>
     <div class="sub">${esc(label)} &nbsp;·&nbsp; ${filteredAll.length} ໃບ / bills &nbsp;·&nbsp; ພິມ ${new Date().toLocaleString("en-GB")}</div>
     <table><thead><tr><th>ປະເພດການຈ່າຍ / Payment type</th><th class="num">ໃບ / Bills</th><th class="num">ຈຳນວນ / Amount</th></tr></thead><tbody>
-      <tr><td>💵 ເງິນສົດ / Cash</td><td class="num">${cash.n}</td><td class="num">${formatKip(cash.sum)}</td></tr>
-      <tr><td>📲 QR</td><td class="num">${qr.n}</td><td class="num">${formatKip(qr.sum)}</td></tr>
-      <tr><td>🏦 ໂອນ / Transfer</td><td class="num">${tr.n}</td><td class="num">${formatKip(tr.sum)}</td></tr>
+      ${payRows.map(r=>`<tr><td>${r.icon} ${r.full} / ${r.en}</td><td class="num">${r.n}</td><td class="num">${formatKip(r.sum)}</td></tr>`).join("")}
       <tr><td>🎁 FOC / ຟຣີ</td><td class="num">${foc.n}</td><td class="num">—</td></tr>
       <tr><td>🚫 ຍົກເລີກ / Void</td><td class="num">${voidN}</td><td class="num">—</td></tr>
-    </tbody><tfoot><tr><th>ລວມຂາຍສຸດທິ (ສົດ+QR+ໂອນ) / Net sales</th><th class="num">${cash.n+qr.n+tr.n}</th><th class="num">${formatKip(totalRev)}</th></tr></tfoot></table>
+      ${feeSum>0?`<tr><td>− ຄ່າຄອມແອັບສົ່ງ / Delivery commission</td><td class="num">—</td><td class="num">-${formatKip(feeSum)}</td></tr>`:""}
+    </tbody><tfoot><tr><th>ລວມຂາຍສຸດທິ / Net sales</th><th class="num">${totalN}</th><th class="num">${formatKip(totalRev)}</th></tr>
+    ${feeSum>0?`<tr><th>ຮ້ານຈະໄດ້ຮັບ / Payout after commission</th><th class="num"></th><th class="num">${formatKip(totalRev-feeSum)}</th></tr>`:""}</tfoot></table>
     <table><thead><tr><th>ວັນທີ/ເວລາ / Date-Time</th><th>ໃບບິນ / Bill</th><th>ພະນັກງານ / Cashier</th><th>ສິນຄ້າ / Items</th><th>ລູກຄ້າ / Customer</th><th>ຈ່າຍ / Pay</th><th class="num">ລວມ / Total</th></tr></thead>
     <tbody>${rows||`<tr><td colspan="7">ບໍ່ມີ / No data</td></tr>`}</tbody></table>`;
     setTimeout(()=>printReport(html),50);
@@ -3043,11 +3165,11 @@ function SalesHistoryView({ sales, setSales, shopInfo, role }) {
       <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",overflow:"hidden" }}>
         {filtered.length===0?<div style={{ padding:40,textAlign:"center",color:"#9ca3af" }}>ຍັງບໍ່ມີ</div>:filtered.map((s,i)=>{
           const net=s.items.reduce((a,it)=>a+itemPrice(it)*it.qty,0)-(s.discount||0);
-          const isFOC=s.payment==="foc"; const isVoid=s.voided;
+          const isFOC=!!payInfo(s.payment).free; const isVoid=s.voided; const pm=payInfo(s.payment);
           return(
             <div key={s.id} style={{ display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderBottom:i<filtered.length-1?"1px solid #f3f4f6":"none",opacity:isVoid?0.5:1,background:isVoid?"#fff5f5":isFOC?"#f0fdf4":"#fff" }}>
-              <div style={{ width:34,height:34,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:isVoid?"#fee2e2":isFOC?"#dcfce7":s.payment==="cash"?"#dcfce7":s.payment==="qr"?"#ede9fe":"#dbeafe",fontSize:16 }}>
-                {isVoid?"🚫":isFOC?"🎁":s.payment==="cash"?"💵":s.payment==="qr"?"📲":"🏦"}
+              <div style={{ width:34,height:34,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:isVoid?"#fee2e2":pm.bg,fontSize:16 }}>
+                {isVoid?"🚫":pm.icon}
               </div>
               <div style={{ flex:1,minWidth:0 }}>
                 <div style={{ fontSize:13,fontWeight:600,display:"flex",alignItems:"center",gap:6 }}>
@@ -3066,7 +3188,8 @@ function SalesHistoryView({ sales, setSales, shopInfo, role }) {
               </div>
               <div style={{ textAlign:"right",flexShrink:0 }}>
                 <div style={{ fontSize:14,fontWeight:700,color:isVoid?"#9ca3af":isFOC?"#16a34a":"#7c3aed" }}>{isVoid?"—":isFOC?"FOC":formatKip(net)}</div>
-                <div style={{ fontSize:11,color:"#6b7280" }}>{s.payment==="cash"?"ສົດ":s.payment==="qr"?"QR":s.payment==="transfer"?"ໂອນ":"FOC"}</div>
+                <div style={{ fontSize:11,color:"#6b7280" }}>{pm.lao}{s.bank?` · ${s.bank}`:""}</div>
+                {pm.fee&&!isVoid&&<div style={{ fontSize:10,color:pm.tint }}>ໄດ້ຮັບ {formatKip(orderPayout(s))}</div>}
               </div>
               <div style={{ display:"flex",gap:4 }}>
                 <button onClick={()=>setTimeout(()=>printReceipt(s,shopInfo),50)} title="ພິມ" style={{ padding:"5px 8px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:6,cursor:"pointer",fontSize:11 }}>🖨️</button>
@@ -3085,7 +3208,7 @@ function SalesHistoryView({ sales, setSales, shopInfo, role }) {
 // ============================================================
 // ADMIN with Add-ons management
 // ============================================================
-function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons, qrImage, setQrImage, shopInfo, setShopInfo, role, onResetTestData, onPushAll }) {
+function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons, qrImage, setQrImage, shopInfo, setShopInfo, role, onResetTestData, onPushAll, feeCfg, onSaveFeeCfg }) {
   const [tab,setTab]=useState("menu");
   const [editItem,setEditItem]=useState(null);
   const [filterCat,setFilterCat]=useState("all");
@@ -3098,6 +3221,7 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
   const [showAddAddon,setShowAddAddon]=useState(false);
   const [addonForm,setAddonForm]=useState({name:"",nameLao:"",price:"",group:"milk"});
   const [shopForm,setShopForm]=useState(shopInfo);
+  const [fees,setFees]=useState(()=>({ ...FEE_CFG_DEFAULT, ...(feeCfg||{}) }));
   const [printerCfg,setPrinterCfg]=useState(()=>stor.get("printerConfig",PRINTER_DEFAULT));
   const [,setSoundTick]=useState(0); // force re-render when the sale-sound / alert toggles change
   const [pushMsg,setPushMsg]=useState("");
@@ -3163,6 +3287,12 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
   const delAddon=(id)=>{ if(!window.confirm("ລຶບ?"))return; const u=addons.filter(a=>a.id!==id); setAddons(u); };
 
   const saveShop=()=>{setShopInfo(shopForm);alert("ບັນທຶກສຳເລັດ ✓");};
+  // Blank or nonsense reads as 0% rather than NaN, which would poison every later sale.
+  const saveFees=()=>{
+    const clean={};
+    PAYMENTS.filter(m=>m.fee).forEach(m=>{ clean[m.id]=Math.min(100,Math.max(0,Number(fees[m.id])||0)); });
+    setFees(clean); onSaveFeeCfg(clean); alert("ບັນທຶກຄ່າຄອມສຳເລັດ ✓");
+  };
 
   const filtered=filterCat==="all"?menu:menu.filter(m=>m.cat===filterCat);
   const inpStyle={width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:14,boxSizing:"border-box"};
@@ -3378,6 +3508,30 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             )}
             <input ref={logoRef} type="file" accept="image/*" onChange={e=>handleImg(e,"logo")} style={{ display:"none" }} />
             <div style={{ fontSize:11,color:"#9ca3af",marginTop:8 }}>💡 ໃຊ້ຮູບຂາວດຳ ຊັດເຈນ ຈະພິມໄດ້ດີທີ່ສຸດ · Use a clear black &amp; white logo for best thermal print</div>
+          </div>
+          <div style={{ borderTop:"1px solid #e5e7eb",marginTop:18,paddingTop:16 }}>
+            <div style={{ fontSize:14,fontWeight:600,marginBottom:4 }}>🛵 ຄ່າຄອມແອັບສົ່ງ / Delivery commission</div>
+            <div style={{ fontSize:11,color:"#9ca3af",marginBottom:10 }}>
+              ເປີເຊັນທີ່ແອັບຫັກຈາກຍອດບິນ · ບິນເກົ່າຈະບໍ່ປ່ຽນ, ໃຊ້ອັດຕາຂອງມື້ທີ່ຂາຍ
+              <br/>Rate each platform keeps. Past bills keep the rate they were rung up at.
+            </div>
+            <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12 }}>
+              {PAYMENTS.filter(m=>m.fee).map(m=>(
+                <div key={m.id}>
+                  <div style={{ fontSize:12,color:"#6b7280",marginBottom:4 }}>{m.icon} {m.full}</div>
+                  <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+                    <input type="number" min="0" max="100" step="0.5" disabled={role!=="owner"}
+                      value={fees[m.id]}
+                      onChange={e=>setFees({...fees,[m.id]:e.target.value===""?"":Number(e.target.value)})}
+                      style={{ ...inpStyle,width:90,background:role==="owner"?"#fff":"#f3f4f6" }} />
+                    <span style={{ fontSize:14,fontWeight:700,color:m.tint }}>%</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {role==="owner"
+              ? <button onClick={saveFees} style={{ marginTop:12,padding:"9px 18px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer",fontSize:13 }}>💾 ບັນທຶກຄ່າຄອມ</button>
+              : <div style={{ marginTop:10,fontSize:11,color:"#9ca3af" }}>🔒 ແກ້ໄຂໄດ້ສະເພາະເຈົ້າຂອງ / Owner only</div>}
           </div>
           <button onClick={saveShop} style={{ marginTop:16,padding:"12px 24px",background:"#16a34a",color:"#fff",border:"none",borderRadius:10,fontWeight:700,cursor:"pointer" }}>💾 ບັນທຶກ</button>
         </div>
@@ -3726,10 +3880,11 @@ function ShiftView({ shifts, sales, currentShift, staleOpen = [], onCloseStale, 
 
       {visibleShifts.map(sh=>{
         const ss=sales.filter(s=>!s.voided&&s.payment!=="foc"&&s.shiftId===sh.id);
-        const cashR=ss.filter(s=>s.payment==="cash").reduce((a,s)=>a+orderNet(s),0);
-        const qrR=ss.filter(s=>s.payment==="qr").reduce((a,s)=>a+orderNet(s),0);
-        const tfR=ss.filter(s=>s.payment==="transfer").reduce((a,s)=>a+orderNet(s),0);
-        const total=cashR+qrR+tfR; const open=!sh.closedAt;
+        const byPay=(id)=>ss.filter(s=>s.payment===id).reduce((a,s)=>a+orderNet(s),0);
+        // Every method that took money, so a shift with delivery orders still adds up.
+        const tiles=PAYMENTS.filter(m=>!m.free).map(m=>({ ...m, amt:byPay(m.id) })).filter(t=>t.amt>0);
+        const total=tiles.reduce((a,t)=>a+t.amt,0); const open=!sh.closedAt;
+        const shFee=ss.filter(s=>payInfo(s.payment).fee).reduce((a,s)=>a+orderFee(s),0);
         return(
           <div key={sh.id} style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",marginBottom:8,overflow:"hidden" }}>
             <div onClick={()=>setExpanded(expanded===sh.id?null:sh.id)} style={{ padding:"12px 16px",cursor:"pointer",display:"flex",alignItems:"center",gap:10 }}>
@@ -3744,7 +3899,7 @@ function ShiftView({ shifts, sales, currentShift, staleOpen = [], onCloseStale, 
             {expanded===sh.id&&(
               <div style={{ padding:"14px 16px",borderTop:"1px solid #f3f4f6",background:"#f9f6f0" }}>
                 <div style={{ display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:10 }}>
-                  {[["💵 ສົດ",cashR,"#16a34a"],["📲 QR",qrR,"#7c3aed"],["🏦 ໂອນ",tfR,"#2563eb"],["🧾",ss.length,"#374151"]].map(([l,v,c])=>(
+                  {[...tiles.map(t=>[`${t.icon} ${t.lao}`,t.amt,t.tint]),["🧾",ss.length,"#374151"]].map(([l,v,c])=>(
                     <div key={l} style={{ background:"#fff",padding:8,borderRadius:7,textAlign:"center" }}>
                       <div style={{ fontSize:11,color:"#6b7280" }}>{l}</div>
                       <div style={{ fontWeight:700,color:c,fontSize:12 }}>{typeof v==="number"&&l!=="🧾"?KS(sh,v):v}</div>
@@ -3752,6 +3907,11 @@ function ShiftView({ shifts, sales, currentShift, staleOpen = [], onCloseStale, 
                   ))}
                 </div>
                 <div style={{ background:"#fff",padding:10,borderRadius:7,fontSize:12 }}>
+                  {shFee>0&&(
+                    <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:"#db2777" }}>
+                      <span>🛵 ຫັກຄ່າຄອມແລ້ວ</span><span>{KS(sh,total-shFee)}</span>
+                    </div>
+                  )}
                   <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ເງິນເລີ່ມ</span><span>{KS(sh,sh.openingCash)}</span></div>
                   {sh.closedAt&&<>
                     <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}><span>ຄາດວ່າ</span><span>{KS(sh,sh.expectedCash||0)}</span></div>
@@ -3850,6 +4010,8 @@ function ReportView({ sales, masked, onToggleNumbers }) {
   const discount=valid.reduce((s,o)=>s+(o.discount||0),0);
   const pay=(p)=>valid.filter(o=>o.payment===p).reduce((s,o)=>s+orderNet(o),0);
   const cash=pay("cash"),qr=pay("qr"),transfer=pay("transfer");
+  // Commission the delivery platforms keep out of the revenue figure above it.
+  const dlFee=valid.filter(o=>payInfo(o.payment).fee).reduce((s,o)=>s+orderFee(o),0);
   const voids=per.filter(s=>s.voided).length;
   const foc=per.filter(s=>s.payment==="foc").length;
   const im={};
@@ -3918,7 +4080,7 @@ function ReportView({ sales, masked, onToggleNumbers }) {
       {/* Payment + extras */}
       <div style={{ background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",padding:16,marginBottom:16 }}>
         <div style={{ fontSize:14,fontWeight:700,marginBottom:10 }}>💳 ຕາມການຈ່າຍ / By payment</div>
-        {[["💵 ເງິນສົດ / Cash",cash],["📲 QR",qr],["🏦 ໂອນ / Transfer",transfer]].map(([l,v])=>(
+        {PAYMENTS.filter(m=>!m.free).map(m=>[`${m.icon} ${m.full}`,pay(m.id)]).filter(([,v])=>v>0).map(([l,v])=>(
           <div key={l} style={{ display:"flex",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid #f3f4f6",fontSize:14 }}>
             <span>{l}</span><span style={{ fontWeight:700 }}>{K(v)}{revenue>0&&<span style={{ color:"#9ca3af",fontWeight:400,fontSize:12,marginLeft:6 }}>{((v/revenue)*100).toFixed(0)}%</span>}</span>
           </div>
@@ -3927,6 +4089,12 @@ function ReportView({ sales, masked, onToggleNumbers }) {
           <span>ສ່ວນຫຼຸດ / Discount: <b style={{ color:"#dc2626" }}>-{K(discount)}</b></span>
           <span>ຍົກເລີກ / Void: <b>{voids}</b> · FOC: <b>{foc}</b></span>
         </div>
+        {dlFee>0&&(
+          <div style={{ display:"flex",justifyContent:"space-between",padding:"6px 0",fontSize:13,borderTop:"1px solid #f3f4f6",marginTop:4 }}>
+            <span style={{ color:"#6b7280" }}>🛵 ຫັກຄ່າຄອມແອັບສົ່ງ · ຮ້ານໄດ້ຮັບ</span>
+            <span style={{ fontWeight:700,color:"#db2777" }}>{K(revenue-dlFee)}</span>
+          </div>
+        )}
       </div>
 
       {/* Items sold */}
@@ -4012,6 +4180,7 @@ export default function App() {
   const [recipes,setRecipes]=useState(()=>stor.get("recipes",[]));
   const [production,setProduction]=useState(()=>stor.get("production",[]));
   const [costCfg,setCostCfg]=useState(()=>stor.get("costCfg",COST_CFG_DEFAULT));
+  const [feeCfg,setFeeCfg]=useState(()=>stor.get("feeCfg",FEE_CFG_DEFAULT));
   const [qrImage,setQrImage]=useState(()=>stor.get("qrImage",""));
   const [shopInfo,setShopInfo]=useState(()=>stor.get("shopInfo",DEFAULT_SHOP_INFO));
   const [parkedOrders,setParkedOrders]=useState(()=>stor.get("parked",[]));
@@ -4087,6 +4256,7 @@ export default function App() {
     pushSetting("categories", categories);
     pushSetting("addons", addons);
     pushSetting("shopInfo", shopInfo);
+    pushSetting("feeCfg", feeCfg);
   };
 
   // Auto-save parked
@@ -4159,7 +4329,7 @@ export default function App() {
       if (purgeMs) arr = arr.filter(r => new Date(r[tsField]).getTime() >= purgeMs); // drop reset rows
       return arr;
     };
-    const SETTING_KEYS = { menu: setMenu, categories: setCategories, addons: setAddons, shopInfo: setShopInfo, staffCfg: setStaffCfg, costCfg: setCostCfg };
+    const SETTING_KEYS = { menu: setMenu, categories: setCategories, addons: setAddons, shopInfo: setShopInfo, staffCfg: setStaffCfg, costCfg: setCostCfg, feeCfg: setFeeCfg };
     // Two-step settings sync: read the tiny timestamp list first, then download only
     // the keys that actually changed. (The menu blob holds the photos and can be
     // megabytes — pulling it every 30s on every device was slow and burned egress.)
@@ -4364,6 +4534,7 @@ export default function App() {
   const saveRecipe=(r)=>{ const u=recipes.some(x=>x.id===r.id)?recipes.map(x=>x.id===r.id?r:x):[...recipes,r]; setRecipes(u); stor.set("recipes",u); pushRecipe(r); };
   const deleteRecipe=(id)=>{ const row=recipes.find(x=>x.id===id); if(!row)return; const t={...row,deleted:true}; const u=recipes.map(x=>x.id===id?t:x); setRecipes(u); stor.set("recipes",u); pushRecipe(t); };
   const saveCostCfg=(c)=>{ setCostCfg(c); pushSetting("costCfg",c); };
+  const saveFeeCfg=(c)=>{ setFeeCfg(c); pushSetting("feeCfg",c); };
   const pushProduction=(r)=>{ syncProduction(r).then(ok=>markPending("pendingProduction",r.id,ok)).catch(()=>markPending("pendingProduction",r.id,false)); };
   const saveProduction=(r)=>{ const u=production.some(x=>x.id===r.id)?production.map(x=>x.id===r.id?r:x):[...production,r]; setProduction(u); stor.set("production",u); pushProduction(r); };
   // The ONLY place staff data touches the books: one expense row per month, with a
@@ -4463,7 +4634,7 @@ export default function App() {
           fontSize:15, fontWeight:700, cursor:"pointer", maxWidth:"92%", textAlign:"center",
         }}>🔔 ຂາຍໃໝ່ / New sale &nbsp;·&nbsp; {saleAlert.text}</div>
       )}
-      {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
+      {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} feeCfg={feeCfg} />}
       {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} staleOpen={openShifts.slice(1)} onCloseStale={(id)=>setShiftModal({type:"close",targetId:id})} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="dashboard"&&<DashboardView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
@@ -4472,7 +4643,7 @@ export default function App() {
       {view==="production"&&<ProductionView menu={menu} categories={categories} sales={sales} production={production} onSave={saveProduction} />}
       {view==="recipe"&&<RecipeView recipes={recipes} menu={menu} costCfg={costCfg} onSaveRecipe={saveRecipe} onDeleteRecipe={deleteRecipe} onSaveCfg={saveCostCfg} />}
       {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
-      {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
+      {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} feeCfg={feeCfg} onSaveFeeCfg={saveFeeCfg} />}
     </div>
   );
 
@@ -4494,7 +4665,7 @@ export default function App() {
       <div className={`view-content layout-${mode}`} style={{ flex:1,minWidth:0,overflowY:"auto",overflowX:"hidden",paddingTop:"calc(44px + env(safe-area-inset-top, 0px))",paddingBottom:"calc(64px + env(safe-area-inset-bottom, 0px))" }}>
         <UpdateBanner />
         <OfflineBanner />
-        {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} />}
+        {view==="pos"&&<POSView menu={menu} categories={categories} addons={addons} onSale={addSale} onUpdateSale={updateSale} currentShift={currentShift} cashier={ROLES[role].label} qrImage={qrImage} shopInfo={shopInfo} parkedOrders={parkedOrders} setParkedOrders={setParkedOrders} mode={mode} feeCfg={feeCfg} />}
         {view==="shift"&&<ShiftView shifts={shifts} sales={sales} currentShift={currentShift} staleOpen={openShifts.slice(1)} onCloseStale={(id)=>setShiftModal({type:"close",targetId:id})} onOpen={()=>setShiftModal("open")} onClose={()=>setShiftModal("close")} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
         {view==="dashboard"&&<DashboardView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
       {view==="report"&&<ReportView sales={sales} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} />}
@@ -4503,7 +4674,7 @@ export default function App() {
       {view==="production"&&<ProductionView menu={menu} categories={categories} sales={sales} production={production} onSave={saveProduction} />}
       {view==="recipe"&&<RecipeView recipes={recipes} menu={menu} costCfg={costCfg} onSaveRecipe={saveRecipe} onDeleteRecipe={deleteRecipe} onSaveCfg={saveCostCfg} />}
       {view==="accounting"&&<AccountingView sales={sales} expenses={expenses} masked={moneyMasked} onToggleNumbers={role==="owner"?undefined:toggleNumbers} onAddExpense={addExpense} onDeleteExpense={deleteExpense} />}
-        {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} />}
+        {view==="admin"&&<AdminView menu={menu} setMenu={setMenuSync} categories={categories} setCategories={setCategoriesSync} addons={addons} setAddons={setAddonsSync} qrImage={qrImage} setQrImage={setQrImage} shopInfo={shopInfo} setShopInfo={setShopInfoSync} role={role} onResetTestData={resetTestData} onPushAll={pushAllSettings} feeCfg={feeCfg} onSaveFeeCfg={saveFeeCfg} />}
       </div>
       <div style={{ position:"fixed",bottom:0,left:0,right:0,height:"calc(64px + env(safe-area-inset-bottom, 0px))",background:"#1a1a2e",display:"flex",alignItems:"flex-start",paddingBottom:"env(safe-area-inset-bottom, 0px)",zIndex:200,borderTop:"1px solid rgba(255,255,255,0.08)",boxSizing:"border-box" }}>
         {allowed.map(n=>(

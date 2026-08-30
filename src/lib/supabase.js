@@ -25,6 +25,8 @@ export async function syncOrder(order) {
       voided:      order.voided    ?? false,
       void_reason: order.voidReason?? null,
       parked_name: order.parkedName?? null,
+      bank:        order.bank       ?? null,
+      fee_pct:     order.feePct     ?? null,
       deleted:     order.deleted    ?? false,
       updated_at:  new Date().toISOString(),
     });
@@ -135,6 +137,8 @@ export async function fetchSalesSince(since) {
       voided:     r.voided ?? false,
       voidReason: r.void_reason,
       parkedName: r.parked_name,
+      bank:       r.bank ?? null,
+      feePct:     r.fee_pct == null ? null : Number(r.fee_pct),
       deleted:    r.deleted ?? false,
     })),
   };
