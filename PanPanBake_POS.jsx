@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.30-3";
+const BUILD_VERSION = "2026.08.30-4";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -3951,8 +3951,13 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
   // The money lines shared by both places. `fmt` differs: the open shift always
   // shows real figures (the person on duty is counting against them), while
   // history hides anything from an earlier day behind the owner PIN.
-  const moneyLines=(m,fmt)=>(<>
-    {m.tiles.map(t=>(
+  const moneyLines=(m,fmt)=>{
+    // Split by whether the money is already in hand. A delivery bill is revenue,
+    // but the shop is not holding it yet, so the two are subtotalled separately
+    // rather than run together into one number.
+    const now=m.tiles.filter(t=>!t.fee), later=m.tiles.filter(t=>t.fee);
+    const receivedNow=now.reduce((a,t)=>a+t.amt,0);
+    const row=(t)=>(
       <div key={t.id}>
         <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,color:t.tint }}>
           <span>{t.icon} {t.full}</span><span>{fmt(t.amt)}</span>
@@ -3963,22 +3968,33 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
           </div>
         ))}
       </div>
-    ))}
-    {m.dl.length>0&&(
-      <div style={{ marginTop:4,marginBottom:4,padding:"7px 9px",background:"#fdf2f8",borderRadius:6 }}>
-        <div style={{ fontSize:11,fontWeight:700,color:"#db2777",marginBottom:3 }}>🛵 ຈະໄດ້ຮັບພາຍຫຼັງ / Coming later</div>
-        {m.dl.map(x=>(
-          <div key={x.id} style={{ display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:11,color:"#6b7280" }}>
-            <span>{x.icon} {x.full} <span style={{ color:"#9ca3af" }}>({fmt(x.gross)} − ຄ່າຄອມ)</span></span>
-            <span style={{ fontWeight:600,color:"#db2777" }}>{fmt(x.payout)}</span>
-          </div>
-        ))}
-        <div style={{ display:"flex",justifyContent:"space-between",borderTop:"1px solid #fbcfe8",paddingTop:3,fontWeight:700,color:"#db2777" }}>
-          <span>ລວມຈະໄດ້ຮັບ</span><span>{fmt(m.dlPayout)}</span>
+    );
+    return (<>
+      {now.map(row)}
+      {/* Only worth drawing when something is still owed — with no delivery this
+          subtotal would just restate the total sales line below it. */}
+      {later.length>0&&(
+        <div style={{ display:"flex",justifyContent:"space-between",marginTop:2,marginBottom:5,paddingTop:5,borderTop:"1px solid #e5e7eb",fontWeight:700 }}>
+          <span>ລວມທີ່ໄດ້ຮັບແລ້ວ / Received</span><span style={{ color:"#16a34a" }}>{fmt(receivedNow)}</span>
         </div>
-      </div>
-    )}
-  </>);
+      )}
+      {later.map(row)}
+      {m.dl.length>0&&(
+        <div style={{ marginTop:4,marginBottom:4,padding:"7px 9px",background:"#fdf2f8",borderRadius:6 }}>
+          <div style={{ fontSize:11,fontWeight:700,color:"#db2777",marginBottom:3 }}>🛵 ຈະໄດ້ຮັບພາຍຫຼັງ / Coming later</div>
+          {m.dl.map(x=>(
+            <div key={x.id} style={{ display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:11,color:"#6b7280" }}>
+              <span>{x.icon} {x.full} <span style={{ color:"#9ca3af" }}>({fmt(x.gross)} − ຄ່າຄອມ)</span></span>
+              <span style={{ fontWeight:600,color:"#db2777" }}>{fmt(x.payout)}</span>
+            </div>
+          ))}
+          <div style={{ display:"flex",justifyContent:"space-between",borderTop:"1px solid #fbcfe8",paddingTop:3,fontWeight:700,color:"#db2777" }}>
+            <span>ລວມຈະໄດ້ຮັບ</span><span>{fmt(m.dlPayout)}</span>
+          </div>
+        </div>
+      )}
+    </>);
+  };
 
   const shiftCashiers=[...new Set(shifts.map(s=>s.cashier).filter(Boolean))].sort();
   const billsIn=(sh)=>sales.filter(s=>!s.voided&&s.payment!=="foc"&&s.shiftId===sh.id).length;
