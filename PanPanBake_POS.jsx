@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.09.02-1";
+const BUILD_VERSION = "2026.09.02-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -3937,6 +3937,10 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
     return {
       ss, tiles, banks, dl, moves, out, cashIn,
       total: tiles.reduce((a,t)=>a+t.amt,0),
+      // What the shop actually took in: everything except the delivery apps,
+      // which have not paid yet. Kept apart from `total` so no screen has to
+      // add or subtract to work out which of the two it means.
+      received: tiles.filter(t=>!t.fee).reduce((a,t)=>a+t.amt,0),
       dlPayout: dl.reduce((a,x)=>a+x.payout,0),
       fee: dl.reduce((a,x)=>a+(x.gross-x.payout),0),
       expected: (sh.openingCash||0)+cashIn-out,
@@ -3946,7 +3950,7 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
   // The money lines shared by both places. `fmt` differs: the open shift always
   // shows real figures (the person on duty is counting against them), while
   // history hides anything from an earlier day behind the owner PIN.
-  const moneyLines=(m,fmt)=>{
+  const moneyLines=(m,fmt,showDelivery)=>{
     // Split by whether the money is already in hand. A delivery bill is revenue,
     // but the shop is not holding it yet, so the two are subtotalled separately
     // rather than run together into one number.
@@ -3969,6 +3973,27 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
       <div style={{ display:"flex",justifyContent:"space-between",marginTop:2,marginBottom:2,paddingTop:5,borderTop:"1px solid #e5e7eb",fontWeight:700 }}>
         <span>ລວມທີ່ໄດ້ຮັບແລ້ວ / Received</span><span style={{ color:"#16a34a" }}>{fmt(receivedNow)}</span>
       </div>
+      {/* Only on the review screens. The open shift keeps delivery in its own
+          card so it is never mixed into the cashier's count. */}
+      {showDelivery&&m.dl.length>0&&(
+        <div style={{ marginTop:6,padding:"7px 9px",background:"#fdf2f8",borderRadius:6 }}>
+          <div style={{ fontSize:11,fontWeight:700,color:"#db2777",marginBottom:3 }}>🛵 ຍັງບໍ່ໄດ້ຮັບ / Not received yet</div>
+          {m.dl.map(x=>(
+            <div key={x.id} style={{ display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:11,color:"#6b7280" }}>
+              <span>{x.icon} {x.full} <span style={{ color:"#9ca3af" }}>({fmt(x.gross)} − ຄ່າຄອມ)</span></span>
+              <span style={{ fontWeight:600,color:"#db2777" }}>{fmt(x.payout)}</span>
+            </div>
+          ))}
+          <div style={{ display:"flex",justifyContent:"space-between",borderTop:"1px solid #fbcfe8",paddingTop:3,fontWeight:700,color:"#db2777" }}>
+            <span>ລວມຈະໄດ້ຮັບ</span><span>{fmt(m.dlPayout)}</span>
+          </div>
+        </div>
+      )}
+      {showDelivery&&m.dl.length>0&&(
+        <div style={{ display:"flex",justifyContent:"space-between",marginTop:6,paddingTop:5,borderTop:"1px dashed #e5e7eb",fontSize:11,color:"#6b7280" }}>
+          <span>ຂາຍລວມທັງໝົດ / All sales</span><span style={{ fontWeight:700 }}>{fmt(m.total)}</span>
+        </div>
+      )}
     </>);
   };
 
@@ -4146,7 +4171,7 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
 
       {visibleShifts.map(sh=>{
         const m=moneyFor(sh);
-        const { ss, tiles, total, dlPayout } = m;
+        const { ss, tiles, total, dlPayout, received } = m;
         const open=!sh.closedAt;
         const shMoves=m.moves, shOut=m.out;
         return(
@@ -4158,9 +4183,13 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
                 <div style={{ fontSize:12,color:"#6b7280" }}>{fmtTime(sh.openedAt)}{sh.closedAt&&` → ${fmtTime(sh.closedAt)}`} · {ss.length} ໃບ</div>
               </div>
               <div style={{ textAlign:"right" }}>
-                <div style={{ fontSize:15,fontWeight:700,color:"#7c3aed" }}>{KS(sh,total)}</div>
-                {dlPayout>0&&<div style={{ fontSize:11,color:"#db2777" }}>🛵 {KS(sh,dlPayout)} ພາຍຫຼັງ</div>}
-                {sh.variance!=null&&sh.variance!==0&&<div style={{ fontSize:11,color:sh.variance>0?"#16a34a":"#dc2626" }}>{sh.variance>0?"+":""}{KS(sh,sh.variance)}</div>}
+                {/* Two figures, each labelled. A single blended total invited the
+                    question of whether the delivery money was already inside it. */}
+                <div style={{ fontSize:15,fontWeight:700,color:"#7c3aed" }}>{KS(sh,dlPayout>0?received:total)}</div>
+                {dlPayout>0&&<div style={{ fontSize:10,color:"#9ca3af",marginTop:-1 }}>ໄດ້ຮັບແລ້ວ</div>}
+                {dlPayout>0&&<div style={{ fontSize:12,fontWeight:700,color:"#db2777",marginTop:3 }}>🛵 {KS(sh,dlPayout)}</div>}
+                {dlPayout>0&&<div style={{ fontSize:10,color:"#9ca3af",marginTop:-1 }}>ພາຍຫຼັງ</div>}
+                {sh.variance!=null&&sh.variance!==0&&<div style={{ fontSize:11,marginTop:2,color:sh.variance>0?"#16a34a":"#dc2626" }}>{sh.variance>0?"+":""}{KS(sh,sh.variance)}</div>}
               </div>
               <span style={{ color:"#9ca3af" }}>{expanded===sh.id?"▲":"▼"}</span>
             </div>
@@ -4175,7 +4204,7 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
                   ))}
                 </div>
                 <div style={{ background:"#fff",padding:10,borderRadius:7,fontSize:12 }}>
-                  {moneyLines(m, (v)=>KS(sh,v))}
+                  {moneyLines(m, (v)=>KS(sh,v), true)}
                   <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,borderTop:"1px solid #f3f4f6",paddingTop:5 }}><span>ເງິນເລີ່ມ</span><span>{KS(sh,sh.openingCash)}</span></div>
                   {shOut>0&&(<>
                     {shMoves.map(mv=>{
