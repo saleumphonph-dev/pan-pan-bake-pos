@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.08.30-4";
+const BUILD_VERSION = "2026.09.02-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -1027,7 +1027,10 @@ function ShiftModal({ type, currentShift, sales, expenses = [], onSubmit, onCanc
   const spent = sumMoves(moves, "spend");
   const dropped = sumMoves(moves, "drop");
   const expected = (currentShift?.openingCash||0) + cashIn - spent - dropped;
-  const rows = PAYMENTS.filter(m => !m.toTill && !m.free)
+  // Delivery is deliberately absent: the cashier is counting a drawer, and money
+  // a platform will wire over next week is only noise at that moment. It still
+  // reaches ບັນຊີ and the reports, which read the sales directly.
+  const rows = PAYMENTS.filter(m => !m.toTill && !m.free && !m.fee)
     .map(m => ({ ...m, amt: byPay(m.id) })).filter(r => r.amt > 0);
   // Which bank each transfer landed in — the split the owner reconciles against.
   const banks = BANKS.map(b => ({
@@ -1035,9 +1038,6 @@ function ShiftModal({ type, currentShift, sales, expenses = [], onSubmit, onCanc
   })).filter(x => x.amt > 0);
   // Delivery bills are rung up at the full price the customer paid; the platform
   // keeps its cut and pays the rest later, so show what is actually owed to the shop.
-  const dl = shiftSales.filter(o => payInfo(o.payment).fee);
-  const dlGross = dl.reduce((a,o) => a + net(o), 0);
-  const dlPayout = dl.reduce((a,o) => a + orderPayout(o), 0);
 
   return (
     <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000 }}>
@@ -1059,11 +1059,6 @@ function ShiftModal({ type, currentShift, sales, expenses = [], onSubmit, onCanc
                     <span>└ {x.b}</span><span>{formatKip(x.amt)}</span>
                   </div>
                 ))}
-              </div>
-            )}
-            {dlGross > 0 && (
-              <div style={{ display:"flex",justifyContent:"space-between",marginBottom:3,fontSize:12,color:"#6b7280" }}>
-                <span>└ ຫັກຄ່າຄອມແລ້ວ ຈະໄດ້ຮັບ</span><span>{formatKip(dlPayout)}</span>
               </div>
             )}
             {CASH_MOVES.map(m => {
@@ -3955,7 +3950,7 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
     // Split by whether the money is already in hand. A delivery bill is revenue,
     // but the shop is not holding it yet, so the two are subtotalled separately
     // rather than run together into one number.
-    const now=m.tiles.filter(t=>!t.fee), later=m.tiles.filter(t=>t.fee);
+    const now=m.tiles.filter(t=>!t.fee);
     const receivedNow=now.reduce((a,t)=>a+t.amt,0);
     const row=(t)=>(
       <div key={t.id}>
@@ -3971,28 +3966,9 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
     );
     return (<>
       {now.map(row)}
-      {/* Only worth drawing when something is still owed — with no delivery this
-          subtotal would just restate the total sales line below it. */}
-      {later.length>0&&(
-        <div style={{ display:"flex",justifyContent:"space-between",marginTop:2,marginBottom:5,paddingTop:5,borderTop:"1px solid #e5e7eb",fontWeight:700 }}>
-          <span>ລວມທີ່ໄດ້ຮັບແລ້ວ / Received</span><span style={{ color:"#16a34a" }}>{fmt(receivedNow)}</span>
-        </div>
-      )}
-      {later.map(row)}
-      {m.dl.length>0&&(
-        <div style={{ marginTop:4,marginBottom:4,padding:"7px 9px",background:"#fdf2f8",borderRadius:6 }}>
-          <div style={{ fontSize:11,fontWeight:700,color:"#db2777",marginBottom:3 }}>🛵 ຈະໄດ້ຮັບພາຍຫຼັງ / Coming later</div>
-          {m.dl.map(x=>(
-            <div key={x.id} style={{ display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:11,color:"#6b7280" }}>
-              <span>{x.icon} {x.full} <span style={{ color:"#9ca3af" }}>({fmt(x.gross)} − ຄ່າຄອມ)</span></span>
-              <span style={{ fontWeight:600,color:"#db2777" }}>{fmt(x.payout)}</span>
-            </div>
-          ))}
-          <div style={{ display:"flex",justifyContent:"space-between",borderTop:"1px solid #fbcfe8",paddingTop:3,fontWeight:700,color:"#db2777" }}>
-            <span>ລວມຈະໄດ້ຮັບ</span><span>{fmt(m.dlPayout)}</span>
-          </div>
-        </div>
-      )}
+      <div style={{ display:"flex",justifyContent:"space-between",marginTop:2,marginBottom:2,paddingTop:5,borderTop:"1px solid #e5e7eb",fontWeight:700 }}>
+        <span>ລວມທີ່ໄດ້ຮັບແລ້ວ / Received</span><span style={{ color:"#16a34a" }}>{fmt(receivedNow)}</span>
+      </div>
     </>);
   };
 
@@ -4035,9 +4011,6 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
                   </div>
                 )}
                 <div style={{ display:"flex",justifyContent:"space-between",borderTop:"1px solid #e5e7eb",paddingTop:6,marginTop:4,fontWeight:700 }}>
-                  <span>ຂາຍລວມ / Total sales</span><span style={{ color:"#7c3aed" }}>{formatKip(m.total)}</span>
-                </div>
-                <div style={{ display:"flex",justifyContent:"space-between",marginTop:3,fontWeight:700 }}>
                   <span>💵 ເງິນສົດຄວນມີ / Cash in drawer</span><span style={{ color:"#16a34a" }}>{formatKip(m.expected)}</span>
                 </div>
               </div>
@@ -4081,6 +4054,29 @@ function ShiftView({ shifts, sales, expenses = [], cashier, currentShift, staleO
             </div>
 
             <button onClick={onClose} style={{ width:"100%",padding:14,background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:10,fontWeight:700,fontSize:16,cursor:"pointer" }}>🔒 ປິດກະ</button>
+
+            {(()=>{ const m=moneyFor(currentShift); if(m.dl.length===0) return null; return (
+              <div style={{ marginTop:14,border:"1px solid #fbcfe8",background:"#fdf2f8",borderRadius:10,padding:12 }}>
+                <div style={{ fontSize:13,fontWeight:700,color:"#db2777",marginBottom:2 }}>🛵 ແອັບສົ່ງ / Delivery apps</div>
+                <div style={{ fontSize:11,color:"#9ca3af",marginBottom:8 }}>
+                  ບໍ່ຢູ່ໃນເງິນກະ · ບໍ່ຕ້ອງນັບຕອນປິດກະ — ແອັບຈະໂອນໃຫ້ພາຍຫຼັງ
+                  <br/>Not in the till. Nothing to count at closing — the app pays later.
+                </div>
+                {m.dl.map(x=>(
+                  <div key={x.id} style={{ display:"flex",justifyContent:"space-between",marginBottom:3,fontSize:12 }}>
+                    <span>{x.icon} {x.full} <span style={{ color:"#9ca3af" }}>({formatKip(x.gross)} − ຄ່າຄອມ)</span></span>
+                    <span style={{ fontWeight:600,color:"#db2777" }}>{formatKip(x.payout)}</span>
+                  </div>
+                ))}
+                <div style={{ display:"flex",justifyContent:"space-between",borderTop:"1px solid #fbcfe8",paddingTop:5,marginTop:2,fontWeight:700,color:"#db2777",fontSize:13 }}>
+                  <span>ລວມຈະໄດ້ຮັບ / Owed to shop</span><span>{formatKip(m.dlPayout)}</span>
+                </div>
+                <div style={{ display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:6,borderTop:"1px dashed #fbcfe8",fontSize:12,color:"#6b7280" }}>
+                  <span>ຂາຍລວມທັງໝົດ (ລວມແອັບສົ່ງ) / All sales</span><span style={{ fontWeight:700 }}>{formatKip(m.total)}</span>
+                </div>
+                <div style={{ fontSize:10,color:"#9ca3af",marginTop:5 }}>ເຂົ້າ 📒 ບັນຊີ ອັດຕະໂນມັດ / Flows into the monthly accounts automatically</div>
+              </div>
+            ); })()}
           </>
         ):(
           <div style={{ textAlign:"center",padding:20 }}>
