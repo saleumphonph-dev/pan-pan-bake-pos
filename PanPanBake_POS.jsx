@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.09.02-2";
+const BUILD_VERSION = "2026.09.06-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -137,6 +137,41 @@ function exportBackup() {
   const name = `panpan-backup-${new Date().toISOString().slice(0,10)}.json`;
   const ok = saveFile(name, JSON.stringify(out, null, 2), "application/json");
   return { ok, name, counts };
+}
+
+// Most items carry an English name and a Lao one, but many were typed with the
+// Lao name in the English field and nothing in the Lao field. Route by script so
+// the English column never ships full of Lao text.
+const LAO_RE = /[\u0E80-\u0EFF]/;
+const splitNames = (it) => {
+  const en = (it.name || "").trim(), lo = (it.nameLao || "").trim();
+  return LAO_RE.test(en) ? { en: "", lo: lo || en } : { en, lo };
+};
+
+/** The price list, for printing shelf tags. One row per item, both names apart. */
+function exportMenuCsv(menu, categories) {
+  const order = categories.map(c => c.id);
+  const label = {};
+  categories.forEach(c => {
+    const lab = (c.label || "").replace(/^[^\w\u0E80-\u0EFF]+/, "").trim();
+    // office_price has label/labelEn the wrong way round, so pick whichever is Lao
+    label[c.id] = LAO_RE.test(lab) ? lab : (LAO_RE.test(c.labelEn || "") ? c.labelEn : lab);
+  });
+  const rank = (c) => { const i = order.indexOf(c); return i < 0 ? 99 : i; };
+  const rows = [...menu].sort((a, b) => {
+    const d = rank(a.cat) - rank(b.cat); if (d) return d;
+    const na = splitNames(a), nb = splitNames(b);
+    return (na.en || na.lo).toLowerCase().localeCompare((nb.en || nb.lo).toLowerCase());
+  }).map((it, i) => {
+    const { en, lo } = splitNames(it);
+    // Trailing blank column to tick off tags as they are replaced in the shop
+    return [i + 1, label[it.cat] || it.cat, en, lo, it.price ?? "", ""].map(csvCell).join(",");
+  });
+  const head = ["#","ໝວດ / Category","ຊື່ອັງກິດ / English","ຊື່ລາວ / Lao","ລາຄາ / Price (₭)","ປ່ຽນປ້າຍແລ້ວ / Tag done"];
+  const name = `panpan-menu-prices-${new Date().toISOString().slice(0,10)}.csv`;
+  // BOM so Excel and Numbers both read the Lao text rather than mojibake
+  const ok = saveFile(name, "\uFEFF" + [head.join(","), ...rows].join("\n"), "text/csv;charset=utf-8");
+  return { ok, name, rows: rows.length };
 }
 
 /** Sales and expenses as CSV, for a spreadsheet or the accountant. */
@@ -3351,6 +3386,10 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
             <div style={{ fontSize:13,color:"#6b7280" }}>{menu.length} ລາຍການ</div>
             <div style={{ display:"flex",gap:8 }}>
               <button onClick={()=>{ if(onPushAll && window.confirm("ສົ່ງເມນູ, ໝວດ, Add-ons ແລະ ຂໍ້ມູນຮ້ານ ປັດຈຸບັນ ໄປໃຫ້ທຸກອຸປະກອນ?\n\nPush current menu, categories, add-ons & shop info to ALL devices?")){ onPushAll(); alert("✅ ສົ່ງຂຶ້ນ Cloud ແລ້ວ.\nອຸປະກອນອື່ນຈະອັບເດດພາຍໃນ ~10 ວິນາທີ.\nPushed — other devices update within ~10s."); } }} style={{ padding:"10px 16px",background:"#1a1a2e",color:"#f4d03f",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }} title="ສົ່ງເມນູໄປໃຫ້ທຸກອຸປະກອນ">📤 ສົ່ງໄປທຸກເຄື່ອງ</button>
+              <button onClick={()=>{ const r=exportMenuCsv(menu,categories);
+                  alert(r.ok ? `✓ ດາວໂຫຼດແລ້ວ / Saved\n${r.name}\n${r.rows} ລາຍການ — ເປີດດ້ວຍ Excel ຫຼື Numbers`
+                             : "❌ ດາວໂຫຼດບໍ່ໄດ້ / Download failed — ລອງເປີດໃນ browser ແທນ app"); }}
+                style={{ padding:"10px 16px",background:"#fff",color:"#1a1a2e",border:"1px solid #e5e7eb",borderRadius:8,fontWeight:700,cursor:"pointer" }} title="ດາວໂຫຼດລາຄາເມນູເປັນ CSV ສຳລັບພິມປ້າຍລາຄາ">🏷️ ລາຄາ CSV</button>
               <button onClick={()=>setShowAdd(!showAdd)} style={{ padding:"10px 18px",background:"#f4d03f",color:"#1a1a2e",border:"none",borderRadius:8,fontWeight:700,cursor:"pointer" }}>+ ເພີ່ມ</button>
             </div>
           </div>
