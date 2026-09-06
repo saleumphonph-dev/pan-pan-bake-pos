@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.09.06-1";
+const BUILD_VERSION = "2026.09.06-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -427,12 +427,17 @@ const cartKey = (item) => `${item.id}:${(item.addons || []).map(a => a.id).sort(
 // Lao label for a sweetness level id (empty string if none/normal-unset)
 const sweetLabel = (id) => { const s = SWEETNESS_LEVELS.find(x => x.id === id); return s ? `${s.emoji} ${s.lao}` : ""; };
 
+// Set when a write fails so the UI can say so. Without this the app showed rows
+// that had only ever reached React state -- they looked synced, then vanished on
+// the next reload, which reads from localStorage.
+let storFull = false;
+const storIsFull = () => storFull;
 const stor = {
   get: (k, def) => { try { const v = localStorage.getItem("ppb_" + k); return v ? JSON.parse(v) : def; } catch { return def; } },
   // Returns false when the write failed (almost always a full localStorage quota).
   // Callers that must not lose data (menu edits) check this and warn the user —
   // silently swallowing the error is what used to make price edits vanish on reload.
-  set: (k, v) => { try { localStorage.setItem("ppb_" + k, JSON.stringify(v)); return true; } catch { return false; } },
+  set: (k, v) => { try { localStorage.setItem("ppb_" + k, JSON.stringify(v)); return true; } catch { storFull = true; return false; } },
 };
 
 // Shrink a picked image before we ever store it. Phone photos arrive as ~1MB+ files
@@ -1743,6 +1748,26 @@ function OfflineBanner() {
     const id = setInterval(() => checkConnection().then(setStatus), 15000);
     return () => clearInterval(id);
   }, []);
+  // A device whose localStorage is full keeps syncing and keeps showing rows, but
+  // nothing survives a reload. That looks exactly like "the data disappeared", so
+  // it needs saying out loud -- louder than being offline, which at least keeps
+  // the bills safe on the device.
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    const id = setInterval(() => setFull(storIsFull()), 5000);
+    return () => clearInterval(id);
+  }, []);
+  if (full) return (
+    <div style={{
+      position:"sticky", top:0, zIndex:51,
+      width:"100%", background:"#b91c1c", color:"#fff",
+      fontFamily:"'Noto Sans Lao',sans-serif", fontSize:12, fontWeight:700,
+      textAlign:"center", padding:"6px 10px", lineHeight:1.4, flexShrink:0,
+    }}>
+      ⚠️ ພື້ນທີ່ໃນເຄື່ອງເຕັມ — ຂໍ້ມູນໃໝ່ຈະຫາຍເມື່ອປິດແອັບ! ລຶບຮູບເມນູອອກ<br/>
+      Storage full — new data will be LOST on reload. Remove menu photos.
+    </div>
+  );
   if (status === "online" || status === "checking") return null;
   const isNoDb = status === "no-db";
   return (
@@ -4720,8 +4745,13 @@ export default function App() {
       // Every session's first poll, and every ~5 min, do a FULL reconcile (fetch
       // from epoch) so any device that drifted out of sync converges back to the
       // complete cloud set. Between those, fetch only changes since the cursor.
+      // Timed off the CLOCK, not the poll count: syncs also fire whenever the app
+      // is brought back to the front, and counting polls would have turned a busy
+      // morning of opening and closing the app into a reconcile every few seconds.
       pollN += 1;
-      const reconcileDue = (pollN === 1) || (pollN % 10 === 0);
+      const nowT = Date.now();
+      const reconcileDue = (pollN === 1) || (nowT - lastReconcile >= 5 * 60 * 1000);
+      if (reconcileDue) lastReconcile = nowT;
       // A reconcile only needs to find rows one side is missing, so ask for ids
       // (a few kB) and re-read whole rows ONLY for a table that is actually out of
       // step. Re-downloading every table in full on a timer was ~700kB a go, per
@@ -4840,9 +4870,30 @@ export default function App() {
       retryPending("pendingRecipes", "recipes", syncRecipe);
       retryPending("pendingProduction", "production", syncProduction);
     };
-    sync(); // immediate on login
-    const id = setInterval(sync, 30000); // every 30s (was 10s — big egress cut)
-    return () => { cancelled = true; clearInterval(id); };
+    // One run at a time, and never twice within a few seconds -- focus, visibility
+    // and online can all fire together when a laptop wakes.
+    let running = false, lastRun = 0, lastReconcile = 0;
+    const runSync = async (why) => {
+      if (running || cancelled) return;
+      if (why !== "timer" && Date.now() - lastRun < 3000) return;
+      running = true;
+      try { await sync(); } finally { running = false; lastRun = Date.now(); }
+    };
+    runSync("login"); // immediate on login
+    const id = setInterval(() => runSync("timer"), 30000); // every 30s (was 10s — big egress cut)
+    // Background tabs get their timers throttled to a minute or worse, and iOS
+    // freezes them completely, so the timer alone is not enough: pull again the
+    // instant the app is brought back, and whenever the network returns.
+    const onWake = () => { if (!document.hidden) runSync("wake"); };
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    window.addEventListener("online", onWake);
+    return () => {
+      cancelled = true; clearInterval(id);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+      window.removeEventListener("online", onWake);
+    };
   }, [role]);
 
   const handlePin=(r)=>{ if(pin===ROLES[r].pin){setRole(r);setPin("");setPinErr("");}else setPinErr("PIN ບໍ່ຖືກຕ້ອງ"); };
