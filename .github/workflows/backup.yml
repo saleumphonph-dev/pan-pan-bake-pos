@@ -1,0 +1,143 @@
+name: Weekly Backup
+
+# The free Supabase plan takes no backups. On 2026-09-07 a stale device pushed an
+# old menu over the good one and 83 items were lost; they came back only because
+# an unrelated copy had been pulled the day before. This makes that copy routine.
+#
+# Covers BOTH halves: the database tables AND the menu photos. Storage objects are
+# not part of Supabase's own database backups, so even a paid plan would not save
+# the photos — they have to be fetched separately, as they are here.
+#
+# THIS REPOSITORY IS PUBLIC, and anyone can download a public repo's artifacts, so
+# the bundle is encrypted before it leaves the runner and the job fails rather
+# than ever uploading the shop's takings in the clear.
+#
+# To restore, download the artifact and run:
+#   openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in panpan-backup-*.enc \
+#     -pass pass:'YOUR PASSPHRASE' | tar -xzf -
+
+on:
+  schedule:
+    - cron: "40 3 * * 0" # Sundays 03:40 UTC (~10:40 Vientiane), after the shop shuts
+  workflow_dispatch: {} # run by hand before anything risky
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to run without a passphrase
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          if [ -z "$PASSPHRASE" ]; then
+            echo "::error::Secret BACKUP_PASSPHRASE is not set. This repo is public, so an"
+            echo "::error::unencrypted backup would publish the shop's sales. Add it under"
+            echo "::error::Settings -> Secrets and variables -> Actions, then re-run."
+            exit 1
+          fi
+
+      - name: Dump tables
+        env:
+          SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p backup/photos
+          date -u +%Y-%m-%dT%H%MZ > backup/TAKEN_AT.txt
+
+          # JSON is never passed through a shell variable: a sale whose note holds a
+          # newline came back as a broken document and the table saved as an empty
+          # array — a backup that looks fine and restores nothing. Pages go straight
+          # to files and jq merges them.
+          fetch() {
+            local table="$1" offset=0 total=0 i=0 n
+            rm -f page_${table}_*.json 2>/dev/null || true
+            while :; do
+              curl -sS --fail --max-time 120 -o _page.json \
+                "$SUPABASE_URL/rest/v1/$table?select=*&offset=$offset&limit=1000" \
+                -H "apikey: $SUPABASE_KEY" -H "Authorization: Bearer $SUPABASE_KEY"
+              n=$(jq 'length' _page.json)
+              [ "$n" -eq 0 ] && break
+              mv _page.json "page_${table}_${i}.json"
+              i=$((i + 1)); total=$((total + n))
+              [ "$n" -lt 1000 ] && break
+              offset=$((offset + 1000))
+            done
+            rm -f _page.json
+            if [ "$i" -eq 0 ]; then
+              echo "[]" > "backup/$table.json"
+            else
+              jq -s 'add' page_${table}_*.json > "backup/$table.json"
+              rm -f page_${table}_*.json
+            fi
+            jq -e 'type=="array"' "backup/$table.json" > /dev/null
+            local got; got=$(jq 'length' "backup/$table.json")
+            if [ "$got" -ne "$total" ]; then
+              echo "::error::$table: saved $got rows but fetched $total"; exit 1
+            fi
+            echo "  $table: $got rows"
+          }
+
+          for t in sales shifts expenses staff attendance recipes production settings push_subscriptions; do
+            fetch "$t"
+          done
+
+      - name: Dump menu photos
+        run: |
+          set -euo pipefail
+          # Read the URLs out of the menu just dumped, so photos always match the
+          # menu they were taken with. Strip ?v= so replaced photos do not duplicate.
+          jq -r '.[] | select(.key=="menu") | .value[]? | .image // empty' backup/settings.json \
+            | grep -E '^https?://' | sed 's/?.*$//' | sort -u > backup/photo-urls.txt || true
+          want=$(wc -l < backup/photo-urls.txt | tr -d ' ')
+          echo "  photos listed in menu: $want"
+          failed=0
+          while read -r url; do
+            [ -z "$url" ] && continue
+            curl -sS --fail --max-time 60 -o "backup/photos/$(basename "$url")" "$url" || failed=$((failed + 1))
+          done < backup/photo-urls.txt
+          got=$(find backup/photos -type f | wc -l | tr -d ' ')
+          echo "  photos saved: $got (failed: $failed)"
+          if [ "$want" -gt 0 ] && [ "$got" -eq 0 ]; then
+            echo "::error::Menu lists $want photos but none downloaded — not shipping a photoless backup."
+            exit 1
+          fi
+
+      - name: Sanity-check before trusting it
+        run: |
+          set -euo pipefail
+          sales=$(jq 'length' backup/sales.json)
+          items=$(jq '[.[] | select(.key=="menu") | .value | length] | first // 0' backup/settings.json)
+          photos=$(find backup/photos -type f | wc -l | tr -d ' ')
+          # An empty dump usually means an auth or network failure, not an empty shop.
+          if [ "$sales" -eq 0 ]; then echo "::error::Zero sales rows — refusing to store an empty backup."; exit 1; fi
+          if [ "$items" -eq 0 ]; then echo "::error::Menu has no items — refusing to store an empty backup."; exit 1; fi
+          echo "### Backup taken" >> "$GITHUB_STEP_SUMMARY"
+          echo "- sales: **$sales**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- menu items: **$items**" >> "$GITHUB_STEP_SUMMARY"
+          echo "- photos: **$photos**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Encrypt
+        env:
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          stamp=$(cat backup/TAKEN_AT.txt)
+          tar -czf "panpan-backup-$stamp.tar.gz" backup
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt \
+            -in "panpan-backup-$stamp.tar.gz" \
+            -out "panpan-backup-$stamp.tar.gz.enc" -pass env:PASSPHRASE
+          # Prove it decrypts before the plaintext is deleted. An unreadable backup
+          # is worse than none, because it is trusted until the day it is needed.
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+            -in "panpan-backup-$stamp.tar.gz.enc" -pass env:PASSPHRASE | tar -tzf - > /dev/null
+          echo "round-trip verified"
+          rm -rf backup "panpan-backup-$stamp.tar.gz"
+          ls -lh ./*.enc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: panpan-backup
+          path: "*.enc"
+          retention-days: 90
+          if-no-files-found: error
