@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.09.06-2";
+const BUILD_VERSION = "2026.09.07-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -4605,12 +4605,24 @@ export default function App() {
   };
   // Returns false if the value couldn't even be stored locally (quota) — the caller
   // warns instead of pretending the edit was saved.
-  const pushSetting = (key, value) => {
+  const pushSetting = (key, value, force) => {
     const ts = new Date().toISOString();
+    // The cloud version this edit was built on. Read it BEFORE stamping the new
+    // one, or the guard has nothing to compare against.
+    const baseTs = stor.get(key + "Ts", null);
     if (!stor.set(key, value)) return false;
     stor.set(key + "Ts", ts);
     markSettingPending(key, true);
-    syncSetting(key, value, ts).then(ok => markSettingPending(key, !ok)).catch(() => {});
+    syncSetting(key, value, ts, force ? null : baseTs).then(r => {
+      markSettingPending(key, r !== true);
+      if (r === "stale") {
+        // Someone else changed this while our copy was behind. Put the timestamp
+        // back so the next poll pulls theirs instead of us clobbering it.
+        stor.set(key + "Ts", baseTs || "1970-01-01T00:00:00.000Z");
+        markSettingPending(key, false);
+        alert("⚠️ ບໍ່ໄດ້ບັນທຶກ — ເຄື່ອງອື່ນແກ້ໄຂກ່ອນແລ້ວ.\nແອັບຈະດຶງສະບັບໃໝ່ລົງມາ ແລ້ວລອງແກ້ໃໝ່.\n\nNot saved — another device edited this first.\nThe newer copy is being pulled down; make your change again after it arrives.");
+      }
+    }).catch(() => {});
     return true;
   };
   const setMenuSync       = (v) => { setMenu(v);       return pushSetting("menu", v); };
@@ -4620,11 +4632,11 @@ export default function App() {
   // Manual "Push to all devices" — stamps the current menu/categories/add-ons/
   // shop info as newest and uploads them, so every other device pulls this copy.
   const pushAllSettings = () => {
-    pushSetting("menu", menu);
-    pushSetting("categories", categories);
-    pushSetting("addons", addons);
-    pushSetting("shopInfo", shopInfo);
-    pushSetting("feeCfg", feeCfg);
+    pushSetting("menu", menu, true);
+    pushSetting("categories", categories, true);
+    pushSetting("addons", addons, true);
+    pushSetting("shopInfo", shopInfo, true);
+    pushSetting("feeCfg", feeCfg, true);
   };
 
   // Auto-save parked
@@ -4724,7 +4736,11 @@ export default function App() {
         if (cancelled) return;
         const v = stor.get(k, null), ts = stor.get(k + "Ts", null);
         if (v == null || !ts) { markSettingPending(k, false); continue; }
-        if (await syncSetting(k, v, ts)) markSettingPending(k, false);
+        // Guard the retry too: our own stamp is the base here, so a cloud row that
+        // moved on after we edited belongs to a later edit and must not be undone.
+        const r = await syncSetting(k, v, ts, ts);
+        if (r === true) markSettingPending(k, false);
+        else if (r === "stale") { stor.set(k + "Ts", "1970-01-01T00:00:00.000Z"); markSettingPending(k, false); }
       }
     };
     // Retry rows that failed to upload (e.g. made while offline). Writes don't count

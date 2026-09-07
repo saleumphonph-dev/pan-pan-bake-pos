@@ -424,10 +424,27 @@ export async function fetchSettingValues(keys) {
 /** Upsert one setting (menu/categories/addons/shopInfo) with a timestamp so the
  *  newest edit wins across devices. Returns true on success so the caller can
  *  retry a failed push — a lost upload used to leave every other device stuck on
- *  the old menu with no way to notice or recover. Never throws. */
-export async function syncSetting(key, value, updatedAt) {
+ *  the old menu with no way to notice or recover. Never throws.
+ *
+ *  `baseTs` is the cloud timestamp our copy was built from. If the cloud has moved
+ *  on since then, this edit was made against a stale copy and would silently wipe
+ *  whatever arrived in between — which is exactly how 83 menu items were lost on
+ *  2026-09-07: a phone that could not fit the menu in localStorage kept an old
+ *  copy, and pushing it overwrote everything. Refuse that write and report it.
+ *  Pass baseTs = null only for a deliberate "push mine to all devices". */
+export async function syncSetting(key, value, updatedAt, baseTs) {
   if (!supabase) return false;
   try {
+    if (baseTs) {
+      const { data, error: readErr } = await supabase
+        .from("settings").select("updated_at").eq("key", key).maybeSingle();
+      // Only block on a definite answer; a failed read must not stop the sale.
+      if (!readErr && data && data.updated_at &&
+          new Date(data.updated_at).getTime() > new Date(baseTs).getTime()) {
+        console.warn(`[Supabase] ${key}: cloud is newer than this device's copy — not overwriting`);
+        return "stale";
+      }
+    }
     const { error } = await supabase.from("settings").upsert({
       key,
       value,
