@@ -484,3 +484,30 @@ export async function wipeAllCloudData() {
     return { ok: false, error: e.message };
   }
 }
+
+/** Put one menu photo in Storage and return its public URL.
+ *  Photos used to live as base64 inside the menu JSON. 89 of them made that blob
+ *  4MB, which overflowed the browser's ~5MB localStorage cap — the device then
+ *  could not save the menu at all — and shipped 4MB to every device on every
+ *  edit. As a URL the same menu is 34kB and the image is CDN-cached.
+ *  Falls back to the data URL when offline, so a photo is never simply lost. */
+export async function uploadMenuPhoto(dataUrl, key) {
+  if (!supabase || !dataUrl || !dataUrl.startsWith("data:")) return dataUrl;
+  try {
+    const mime = (dataUrl.match(/^data:([^;]+);base64,/) || [])[1] || "image/jpeg";
+    const ext = mime.includes("png") ? "png" : mime.includes("webp") ? "webp" : "jpg";
+    const b64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+    const bin = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const path = `item-${key}.${ext}`;
+    const { error } = await supabase.storage.from("menu-photos")
+      .upload(path, bin, { contentType: mime, upsert: true, cacheControl: "31536000" });
+    if (error) { console.warn("[Supabase] photo upload failed:", error.message); return dataUrl; }
+    const { data } = supabase.storage.from("menu-photos").getPublicUrl(path);
+    // Replacing a photo reuses the path, and these are cached for a year, so the
+    // URL has to change or every device keeps showing the old picture.
+    return `${data.publicUrl}?v=${Date.now()}`;
+  } catch (e) {
+    console.warn("[Supabase] photo upload failed:", e.message);
+    return dataUrl;
+  }
+}

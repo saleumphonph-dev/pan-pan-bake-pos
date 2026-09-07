@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useWindowSize } from "./src/hooks/useWindowSize.js";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Cell } from "recharts";
-import { syncOrder, syncShift, syncExpense, syncStaff, syncAttendance, syncRecipe, syncProduction, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchStaffSince, fetchAttendanceSince, fetchRecipesSince, fetchProductionSince, fetchRowIds, fetchSettingsMeta, fetchSettingValues, syncSetting } from "./src/lib/supabase.js";
+import { syncOrder, syncShift, syncExpense, syncStaff, syncAttendance, syncRecipe, syncProduction, checkConnection, wipeAllCloudData, fetchSalesSince, fetchShiftsSince, fetchExpensesSince, fetchStaffSince, fetchAttendanceSince, fetchRecipesSince, fetchProductionSince, fetchRowIds, fetchSettingsMeta, fetchSettingValues, syncSetting, uploadMenuPhoto } from "./src/lib/supabase.js";
 import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from "./src/lib/push.js";
 
 // ============================================================
@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.09.07-1";
+const BUILD_VERSION = "2026.09.07-2";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -3347,10 +3347,18 @@ function AdminView({ menu, setMenu, categories, setCategories, addons, setAddons
       // keep more detail so they stay scannable.
       const src=ev.target.result;
       const img=target==="qr"?await shrinkImage(src,640,0.85):await shrinkImage(src);
-      if(target==="form")setForm(x=>({...x,image:img}));
+      // Menu photos go to Storage and only the URL is kept, so the menu blob stays
+      // small enough to save on every device. Logo and QR are one each and stay
+      // inline. uploadMenuPhoto returns the original data URL if it can't reach
+      // the cloud, so picking a photo offline still works.
+      if(target==="form")     setForm(x=>({...x,image:img}));
       else if(target==="edit")setEditItem(x=>({...x,image:img}));
       else if(target==="logo")setShopForm(x=>({...x,logo:img}));
       else{setQrImage(img);stor.set("qrImage",img);}
+      if(target==="form"||target==="edit"){
+        const url=await uploadMenuPhoto(img, target==="edit" ? (editItem?.id ?? `new-${Date.now()}`) : `new-${Date.now()}`);
+        if(url!==img){ if(target==="form")setForm(x=>({...x,image:url})); else setEditItem(x=>({...x,image:url})); }
+      }
     };
     r.readAsDataURL(f);
   };
