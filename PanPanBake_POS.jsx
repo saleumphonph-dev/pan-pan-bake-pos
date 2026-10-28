@@ -10,7 +10,7 @@ import { pushSupported, enablePush, disablePush, ensurePush, sendSalePush } from
 // Bump this on every deploy so each device can confirm (Admin → ⚙️ ລະບົບ) which
 // build it is actually running. If the printed receipt is still wrong but this
 // version is current on the tablet, the problem is the print code, not caching.
-const BUILD_VERSION = "2026.10.21-1";
+const BUILD_VERSION = "2026.10.28-1";
 const DEFAULT_SHOP_INFO = {
   name: "Pan Pan Bake", nameLao: "ຮ້ານ ແປນ ແປນ ເບກ",
   address: "ບ້ານທົ່ງສະໜາມ, ເມືອງຈັນທະບູລີ", addressEn: "Thongsanag Village, Chanthabouly District",
@@ -29,12 +29,12 @@ const INITIAL_CATEGORIES = [
 ];
 
 // Categories that support add-ons (milk swap, extra shots, etc.).
-// drink_foodpanda holds the same drinks at their Foodpanda prices; orders taken
-// off the app need the same milk and sweetness choices as the counter.
-const ADDON_CATEGORIES = ["coffee", "matcha", "smoothie", "drinks", "drink_foodpanda"];
+// drink_foodpanda and drink_eget hold the same drinks at their app prices; orders taken
+// off the apps need the same milk and sweetness choices as the counter.
+const ADDON_CATEGORIES = ["coffee", "matcha", "smoothie", "drinks", "drink_foodpanda", "drink_eget"];
 
 // Categories that support sweetness level selection (all drinks, no charge)
-const DRINK_CATEGORIES = ["coffee", "matcha", "smoothie", "drinks", "drink_foodpanda"];
+const DRINK_CATEGORIES = ["coffee", "matcha", "smoothie", "drinks", "drink_foodpanda", "drink_eget"];
 
 // Sweetness levels — free, no additional charge
 const SWEETNESS_LEVELS = [
